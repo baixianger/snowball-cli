@@ -48,12 +48,32 @@ export function hasToken(): boolean {
 export function getCookie(): string {
   const token = loadToken();
   if (!token) {
-    console.error("\n  No token found. Run first:\n");
-    console.error("    snowball login          # Chrome QR code login");
+    console.error("\n  Not logged in. Run:\n");
+    console.error("    snowball login          # QR code in terminal");
+    console.error("    snowball login --manual  # scan in Chrome window");
     console.error("    snowball token <cookie>  # manual paste\n");
     process.exit(1);
   }
   return token.cookie;
+}
+
+/** Verify token is still valid by making a lightweight API call */
+export async function verifyToken(cookie: string): Promise<{ valid: boolean; username?: string }> {
+  try {
+    const res = await fetch("https://stock.xueqiu.com/v5/stock/realtime/quotec.json?symbol=SH000001", {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Cookie": cookie,
+      },
+    });
+    if (!res.ok) return { valid: false };
+    const data = await res.json();
+    // If we get data back without error, token works
+    if (data.data && !data.error_code) return { valid: true };
+    return { valid: false };
+  } catch {
+    return { valid: false };
+  }
 }
 
 /** Extract xueqiu cookies from Chrome via CDP */

@@ -1,0 +1,189 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/baixianger/brainstorm/main/projects/snowball-cli/logo.png" width="160" alt="Snowball CLI" />
+</p>
+
+<h1 align="center">Snowball CLI</h1>
+
+<p align="center">
+  <strong>雪球股票数据命令行工具 — 为 AI Agent 而生</strong><br/>
+  <sub>30 条命令 | A 股、港股、美股、基金全覆盖 | JSON 输出</sub>
+</p>
+
+<p align="center">
+  <a href="https://github.com/baixianger/snowball-cli#readme">English</a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/snowball-cli"><img src="https://img.shields.io/npm/v/snowball-cli?color=cb3837&logo=npm&logoColor=white" alt="npm" /></a>
+  <a href="https://github.com/baixianger/snowball-cli/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license" /></a>
+  <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-f472b6?logo=bun&logoColor=white" alt="Bun" /></a>
+  <img src="https://img.shields.io/badge/commands-30-orange" alt="commands" />
+  <img src="https://img.shields.io/badge/data-雪球%20Xueqiu-1DA1F2" alt="数据源" />
+</p>
+
+---
+
+封装[雪球](https://xueqiu.com) API 的命令行工具，JSON 输出，为 AI Agent 和脚本设计。
+
+## 快速开始
+
+```bash
+# 安装
+bun add -g snowball-cli
+
+# 以下命令无需登录：
+snowball quote SH600519 SZ000858       # 实时行情
+snowball market                         # 大盘指数
+snowball fund 110011 --nav              # 基金净值
+
+# 登录后解锁全部功能（终端内扫码）
+snowball login
+
+# 尽情使用
+snowball kline SH600519 --period week
+snowball trending day --count 5
+snowball kol SH600519
+```
+
+## 命令一览
+
+### 登录认证
+
+| 命令 | 说明 |
+|---|---|
+| `snowball login` | 二维码登录（终端内显示） |
+| `snowball login --manual` | 二维码登录（Chrome 窗口扫码） |
+| `snowball token <cookie>` | 手动设置 token |
+| `snowball status` | 查看登录状态并验证 token |
+
+### 行情
+
+| 命令 | 说明 | 认证 |
+|---|---|:---:|
+| `snowball quote <代码> [代码...]` | 实时行情 | |
+| `snowball quote <代码> --detail` | 详细（PE、PB、股息率、52 周高低） | * |
+| `snowball pankou <代码>` | 盘口 / 买卖五档 | * |
+| `snowball kline <代码> [--period day] [--count 120]` | K 线数据 | * |
+| `snowball minute <代码>` | 分时图 | * |
+| `snowball market` | 大盘指数总览 | |
+
+<details>
+<summary>K 线周期</summary>
+
+`1m` `5m` `15m` `30m` `60m` `120m` `day` `week` `month` `quarter` `year`
+</details>
+
+### 财务数据
+
+| 命令 | 说明 |
+|---|---|
+| `snowball income <代码> [--count 5]` | 利润表 |
+| `snowball balance <代码> [--count 5]` | 资产负债表 |
+| `snowball cashflow <代码> [--count 5]` | 现金流量表 |
+| `snowball indicator <代码> [--count 5]` | 关键财务指标 |
+| `snowball business <代码>` | 营收构成（按业务分拆） |
+| `snowball forecast <代码>` | 盈利预测 |
+
+### 公司资料 (F10)
+
+| 命令 | 说明 |
+|---|---|
+| `snowball company <代码>` | 公司简介 |
+| `snowball holders <代码> [--top]` | 股东人数变化（--top 十大股东） |
+| `snowball bonus <代码>` | 分红送转历史 |
+| `snowball industry <代码>` | 行业与概念分类 |
+| `snowball org <代码>` | 机构持仓变动 |
+
+### 资金流向
+
+| 命令 | 说明 |
+|---|---|
+| `snowball flow <代码> [--history]` | 资金流向（日内或历史） |
+| `snowball assort <代码>` | 按单量分布（大/中/小单） |
+| `snowball margin <代码>` | 融资融券 |
+| `snowball block <代码>` | 大宗交易 |
+
+### 社交与资讯
+
+| 命令 | 说明 |
+|---|---|
+| `snowball trending [day\|week\|month]` | 热帖排行（大 V 观点） |
+| `snowball live [--important]` | 7x24 实时快讯 |
+| `snowball feed [分类]` | 分类信息流 |
+| `snowball hot [cn\|us\|hk\|global]` | 热门股票 |
+| `snowball kol <代码>` | 个股相关大 V |
+| `snowball user <用户ID>` | 用户最新帖子 |
+| `snowball profile <用户ID>` | 用户主页 |
+| `snowball post <帖子ID>` | 单条帖子详情 |
+
+<details>
+<summary>信息流分类</summary>
+
+`headlines`（头条）`today`（今日话题）`a-shares`（沪深）`us`（美股）`hk`（港股）`funds`（基金）`private`（私募）
+</details>
+
+### 搜索与发现
+
+| 命令 | 说明 |
+|---|---|
+| `snowball search <关键词>` | 搜索股票 |
+| `snowball search-user <关键词>` | 搜索用户 |
+| `snowball screen [SH\|HK\|US]` | 选股器 |
+
+### 基金（无需登录）
+
+| 命令 | 说明 |
+|---|---|
+| `snowball fund <基金代码>` | 基金详情 |
+| `snowball fund <基金代码> --nav` | 净值历史 |
+| `snowball fund <基金代码> --growth` | 收益走势 |
+
+## 代码格式
+
+```
+SH600519    上交所     贵州茅台         AAPL    美股    苹果
+SZ000858    深交所     五粮液           01810   港股    小米
+SZ300750    创业板     宁德时代         110011  基金    易方达中小盘
+```
+
+## Agent 工作流
+
+```bash
+# 早盘简报
+snowball market && snowball live --important --count 10 && snowball trending --count 5
+
+# 个股深度研究
+snowball quote SH600519 --detail
+snowball income SH600519 --count 8
+snowball indicator SH600519 --count 8
+snowball holders SH600519 --top
+snowball flow SH600519 --history
+
+# 大 V 舆情
+snowball kol SH600519 --count 10       # 找到相关大 V
+snowball user <ID> --count 10          # 看最近发帖
+snowball profile <ID>                  # 查看资质
+
+# jq 过滤
+snowball quote SH600519 | jq '.[0].current'
+snowball trending | jq '.[].author'
+```
+
+## 登录原理
+
+```
+snowball login
+  │
+  ├─ 后台启动 Chrome → 打开 xueqiu.com → 通过 WAF 验证
+  ├─ 调用雪球 API → 生成二维码 → 终端渲染
+  ├─ 等待扫码 → 每 2.5 秒轮询状态
+  ├─ 过期？ → 自动刷新（最多 3 次）
+  ├─ 全部失败？ → 降级为 Chrome 窗口手动扫码
+  └─ 成功 → 保存 Cookie 到 ~/.snowball-cli/token.json
+```
+
+备用：`snowball login --manual` 直接打开 Chrome 窗口扫码。
+
+## 协议
+
+MIT

@@ -140,6 +140,7 @@ interface PollResult {
 export async function pollQRStatus(
   code: string,
   wafCookies: string,
+  cdpUrl: string,
   timeoutMs = 120000,
 ): Promise<string> {
   const startTime = Date.now();
@@ -159,23 +160,37 @@ export async function pollQRStatus(
     const status = data.data?.status;
 
     if (status === 1) {
-      // Login confirmed — extract Set-Cookie headers
+      // Login confirmed — try Set-Cookie headers first
       const setCookies = res.headers.getSetCookie?.() ?? [];
       if (setCookies.length > 0) {
-        // Parse Set-Cookie headers into a cookie string
         const authCookies = setCookies
           .map((sc: string) => sc.split(";")[0])
           .join("; ");
-        // Merge with WAF cookies for a complete cookie string
-        return mergeCoookies(wafCookies, authCookies);
+        const merged = mergeCookies(wafCookies, authCookies);
+        if (merged.includes("xq_a_token")) return merged;
       }
-      // If no Set-Cookie in poll response, try to get from the response data
-      // or fall back — the cookies may have been set on the browser instead
-      throw new Error("Login confirmed but no cookies in response — use --manual mode");
+
+      // Fallback: after QR scan, Chrome page also gets the auth cookies.
+      console.log("\n  Scan confirmed! Extracting auth cookies from Chrome...");
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const cookies = await getWafCookies(cdpUrl);
+        if (cookies.includes("xq_a_token")) return cookies;
+      } catch {}
+
+      throw new Error("Login confirmed but could not extract xq_a_token — try: snowball login --manual");
+    }
+
+    if (status === 2) {
+      // Scanned, waiting for user to confirm in the app
+      process.stdout.write("✓");
+      await new Promise(r => setTimeout(r, pollInterval));
+      continue;
     }
 
     if (status === 4) {
-      throw new Error("QR code expired. Run login again.");
+      // QR expired — signal caller to regenerate
+      return "EXPIRED";
     }
 
     // status === 0: still waiting
@@ -187,7 +202,7 @@ export async function pollQRStatus(
 }
 
 /** Merge two cookie strings, later values override earlier ones */
-function mergeCoookies(base: string, override: string): string {
+function mergeCookies(base: string, override: string): string {
   const cookies = new Map<string, string>();
   for (const part of base.split("; ")) {
     const [k, ...v] = part.split("=");
@@ -232,21 +247,32 @@ export async function qrLogin(cdpUrl: string): Promise<QRLoginResult> {
   }
   console.log("\n  ✓ Got WAF cookies\n");
 
-  // 2. Generate QR code
-  console.log("  Generating QR code...");
-  const { qrUrl, code } = await generateQRCode(wafCookies);
-  console.log("  ✓ QR code ready\n");
+  // 2–4. Generate → display → poll (retry up to 3 times on QR expiry)
+  const MAX_QR_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_QR_ATTEMPTS; attempt++) {
+    console.log("  Generating QR code...");
+    const { qrUrl, code } = await generateQRCode(wafCookies);
+    console.log("  ✓ QR code ready\n");
 
-  // 3. Display in terminal
-  console.log("  ┌────────────────────────────────────┐");
-  console.log("  │  Scan this QR with the Xueqiu app  │");
-  console.log("  └────────────────────────────────────┘\n");
-  await renderQRToTerminal(qrUrl);
+    console.log("  ┌────────────────────────────────────┐");
+    console.log("  │  Scan this QR with the Xueqiu app  │");
+    console.log("  └────────────────────────────────────┘\n");
+    await renderQRToTerminal(qrUrl);
 
-  // 4. Poll for completion
-  console.log("  Waiting for scan");
-  process.stdout.write("  ");
-  const cookie = await pollQRStatus(code, wafCookies);
+    console.log("  Waiting for scan (tap 确认登录 in app after scanning)");
+    process.stdout.write("  ");
+    const cookie = await pollQRStatus(code, wafCookies, cdpUrl);
 
-  return { cookie, code };
+    if (cookie === "EXPIRED") {
+      if (attempt < MAX_QR_ATTEMPTS) {
+        console.log(`\n  QR expired. Generating a new one... (${attempt}/${MAX_QR_ATTEMPTS})\n`);
+        continue;
+      }
+      throw new Error("QR code expired 3 times. Try: snowball login --manual");
+    }
+
+    return { cookie, code };
+  }
+
+  throw new Error("QR login failed after retries");
 }

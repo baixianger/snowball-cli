@@ -273,8 +273,8 @@ export async function reports(symbol: string): Promise<any> {
 
 /** Search stocks by keyword */
 export async function search(query: string, count = 10): Promise<any> {
-  const data = await request("/query/v1/suggest_stock.json", { q: query }, XUEQIU_URL);
-  return data.data?.stocks;
+  const data = await request("/query/v1/suggest_stock.json", { q: query, count }, XUEQIU_URL);
+  return data.data;
 }
 
 /** Hot stocks list */
@@ -307,14 +307,23 @@ export async function indices(): Promise<any> {
 // ═══════════════════════════════════════════════════════════════
 
 /** News feed by category */
-export async function feed(category: "headlines" | "a-shares" | "us" | "hk" | "funds" = "headlines", count = 20): Promise<any> {
+export async function feed(category: string = "headlines", count = 20): Promise<any> {
   const catMap: Record<string, number> = {
-    "headlines": -1, "a-shares": 105, "us": 101, "hk": 102, "funds": 104,
+    "headlines": -1, "today": 0, "a-shares": 105, "us": 101, "hk": 102,
+    "funds": 104, "private": 113, "realestate": 111, "auto": 114, "live": 6,
   };
+  const catId = catMap[category] ?? -1;
   const data = await request("/v4/statuses/public_timeline_by_category.json", {
-    since_id: -1, max_id: -1, category: catMap[category], count,
+    since_id: -1, max_id: -1, category: catId, count,
   }, XUEQIU_URL);
-  return data.data;
+  const list = data.list || [];
+  return list.map((item: any) => {
+    try {
+      return formatPost(JSON.parse(item.data));
+    } catch {
+      return item;
+    }
+  });
 }
 
 /** Search posts/articles */
@@ -323,6 +332,111 @@ export async function searchPosts(query: string, count = 10, sort: "time" | "rep
     q: query, count, page: 1, sort, source: "all",
   }, XUEQIU_URL);
   return data.data;
+}
+
+function formatPost(post: any) {
+  return {
+    id: post.id,
+    title: post.title,
+    description: (post.description || post.text || "").replace(/<[^>]+>/g, "").slice(0, 200),
+    author: post.user?.screen_name,
+    author_id: post.user?.id,
+    author_followers: post.user?.followers_count,
+    view_count: post.view_count,
+    reply_count: post.reply_count,
+    like_count: post.like_count ?? post.fav_count,
+    retweet_count: post.retweet_count,
+    created_at: post.created_at,
+    url: post.target ? `https://xueqiu.com${post.target}` : null,
+  };
+}
+
+/** Hot posts by time scope (day/week/month) */
+export async function hotPosts(scope: "day" | "week" | "month" = "day", count = 10, page = 1): Promise<any> {
+  const data = await request("/statuses/hots.json", {
+    a: "1", count, page, scope, type: "status", meigu: "0",
+  }, XUEQIU_URL);
+  // Response is a direct array
+  return (Array.isArray(data) ? data : []).map(formatPost);
+}
+
+/** 7x24 live news feed */
+export async function liveNews(count = 20): Promise<any> {
+  const data = await request("/statuses/livenews/list.json", {
+    since_id: -1, max_id: -1, count,
+  }, XUEQIU_URL);
+  return (data.items || []).map((item: any) => ({
+    id: item.id,
+    text: item.text,
+    created_at: item.created_at,
+    url: item.target,
+    mark: item.mark, // 1=important
+    view_count: item.view_count,
+    reply_count: item.reply_count,
+  }));
+}
+
+/** KOLs / hot users for a stock */
+export async function stockKOLs(symbol: string, count = 10): Promise<any> {
+  const data = await request("/recommend/user/stock_hot_user.json", {
+    symbol, start: 0, count,
+  }, XUEQIU_URL);
+  return (Array.isArray(data) ? data : []).map((u: any) => ({
+    id: u.id,
+    screen_name: u.screen_name,
+    description: u.description,
+    followers_count: u.followers_count,
+    friends_count: u.friends_count,
+    status_count: u.status_count,
+    gender: u.gender,
+    province: u.province,
+    city: u.city,
+    verified: u.verified,
+    verified_description: u.verified_description,
+    url: `https://xueqiu.com/u/${u.id}`,
+  }));
+}
+
+/** User timeline — recent posts by a specific user */
+export async function userPosts(userId: string, count = 10, page = 1): Promise<any> {
+  const data = await request("/statuses/user_timeline.json", {
+    user_id: userId, page, count,
+  }, XUEQIU_URL);
+  return (data.statuses || []).map(formatPost);
+}
+
+/** User profile */
+export async function userProfile(userId: string): Promise<any> {
+  const data = await request("/user/show.json", { id: userId }, XUEQIU_URL);
+  return data;
+}
+
+/** Search users by keyword */
+export async function searchUsers(query: string, count = 10, page = 1): Promise<any> {
+  const data = await request("/users/search.json", { q: query, count, page }, XUEQIU_URL);
+  return data.users ?? data;
+}
+
+/** Important-only live news (marked items) */
+export async function liveNewsImportant(count = 20): Promise<any> {
+  const data = await request("/statuses/livenews/mark/list.json", {
+    since_id: -1, max_id: -1, size: count,
+  }, XUEQIU_URL);
+  return (data.items || []).map((item: any) => ({
+    id: item.id,
+    text: item.text,
+    created_at: item.created_at,
+    url: item.target,
+    mark: item.mark,
+    view_count: item.view_count,
+    reply_count: item.reply_count,
+  }));
+}
+
+/** Single post detail by ID */
+export async function postDetail(postId: string): Promise<any> {
+  const data = await request("/statuses/show.json", { id: postId }, XUEQIU_URL);
+  return data;
 }
 
 // ═══════════════════════════════════════════════════════════════

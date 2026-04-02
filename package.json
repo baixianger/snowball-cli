@@ -1,6 +1,6 @@
 {
   "name": "snowball-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Xueqiu (雪球) stock data CLI for AI agents — quotes, klines, financials, and more",
   "module": "index.ts",
   "type": "module",
