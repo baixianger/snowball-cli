@@ -80,24 +80,32 @@ async function ensureChrome(cdpUrl: string): Promise<void> {
 
   if (!ready) {
     console.log("  Starting Chrome...");
-    const bins: Record<string, string[]> = {
-      darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
-      win32: [
-        `${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe`,
-        `${process.env["PROGRAMFILES(X86)"]}\\Google\\Chrome\\Application\\chrome.exe`,
-        `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
-        "chrome.exe",
-      ],
-      linux: ["google-chrome", "google-chrome-stable", "chromium-browser"],
-    };
-    const candidates = bins[platform()] ?? bins.linux;
-    let bin = candidates[0];
-    for (const c of candidates) {
-      try {
-        const { existsSync } = await import("fs");
+
+    // Priority: --chrome flag > CHROME_PATH env > platform defaults
+    const userPath = flag("chrome") ?? process.env.CHROME_PATH;
+    let bin: string;
+
+    if (userPath) {
+      bin = userPath;
+    } else {
+      const defaults: Record<string, string[]> = {
+        darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+        win32: [
+          `${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe`,
+          `${process.env["PROGRAMFILES(X86)"]}\\Google\\Chrome\\Application\\chrome.exe`,
+          `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+          "chrome.exe",
+        ],
+        linux: ["google-chrome", "google-chrome-stable", "chromium-browser"],
+      };
+      const candidates = defaults[platform()] ?? defaults.linux;
+      bin = candidates[0];
+      const { existsSync } = await import("fs");
+      for (const c of candidates) {
         if (c.includes("/") || c.includes("\\") ? existsSync(c) : true) { bin = c; break; }
-      } catch { continue; }
+      }
     }
+
     const child = spawn(bin, [
       "--remote-debugging-port=9222",
       `--user-data-dir=${profileDir}`,
@@ -138,8 +146,8 @@ const commands: Record<string, Record<string, Command>> = {
   // ── Auth ──────────────────────────────────────────────────────
   "Auth": {
     login: {
-      usage: "login [--manual]",
-      desc: "QR code login (terminal or Chrome window)",
+      usage: "login [--manual] [--chrome <path>]",
+      desc: "QR code login (set CHROME_PATH or --chrome for custom Chrome)",
       run: async () => {
         showLogo();
         console.log("  Snowball CLI — Login\n");
