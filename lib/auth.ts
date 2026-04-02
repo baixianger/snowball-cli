@@ -7,7 +7,7 @@
  *   2. Manual: user pastes token from browser devtools
  */
 
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -25,7 +25,7 @@ export interface TokenData {
 
 /** Save token to disk */
 export function saveToken(data: TokenData): void {
-  Bun.write(TOKEN_PATH, JSON.stringify(data, null, 2));
+  writeFileSync(TOKEN_PATH, JSON.stringify(data, null, 2));
 }
 
 /** Load saved token */
