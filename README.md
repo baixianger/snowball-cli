@@ -28,11 +28,13 @@ A CLI that wraps [Xueqiu (雪球)](https://xueqiu.com) APIs into JSON for AI age
 ## Install
 
 ```bash
-# As a CLI tool
+# CLI tool
+npm install -g snowball-cli     # or
 bun add -g snowball-cli
 
-# As an AI agent skill (Claude Code, Cursor, Windsurf, etc.)
-npx skills add https://github.com/baixianger/snowball-cli
+# AI agent skill (Claude Code, Cursor, Windsurf, etc.)
+npx skills add https://github.com/baixianger/snowball-cli     # or
+bunx skills add https://github.com/baixianger/snowball-cli
 ```
 
 ## Quick start

@@ -28,11 +28,13 @@
 ## 安装
 
 ```bash
-# 作为命令行工具
+# 命令行工具
+npm install -g snowball-cli     # 或
 bun add -g snowball-cli
 
-# 作为 AI Agent 技能（Claude Code、Cursor、Windsurf 等）
-npx skills add https://github.com/baixianger/snowball-cli
+# AI Agent 技能（Claude Code、Cursor、Windsurf 等）
+npx skills add https://github.com/baixianger/snowball-cli     # 或
+bunx skills add https://github.com/baixianger/snowball-cli
 ```
 
 ## 快速开始
