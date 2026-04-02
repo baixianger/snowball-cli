@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/baixianger/brainstorm/main/projects/snowball-cli/logo.png" width="160" alt="Snowball CLI" />
+  <img src="https://raw.githubusercontent.com/baixianger/snowball-cli/main/logo.png" width="160" alt="Snowball CLI" />
 </p>
 
 <h1 align="center">Snowball CLI</h1>
