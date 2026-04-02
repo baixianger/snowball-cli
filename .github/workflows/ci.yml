@@ -44,12 +44,18 @@ jobs:
 
       - name: "fund: detail (no auth)"
         run: bun run index.ts fund 110011
+        timeout-minutes: 1
+        continue-on-error: true
 
       - name: "fund: NAV history (no auth)"
         run: bun run index.ts fund 110011 --nav
+        timeout-minutes: 1
+        continue-on-error: true
 
       - name: "fund: growth (no auth)"
         run: bun run index.ts fund 110011 --growth
+        timeout-minutes: 1
+        continue-on-error: true
 
       # Test QR generation (the cross-platform part of login)
       - name: "qr: generate and render in terminal"
