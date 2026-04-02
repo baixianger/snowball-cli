@@ -1,0 +1,41 @@
+{
+  "name": "snowball-cli",
+  "version": "0.1.0",
+  "description": "Xueqiu (雪球) stock data CLI for AI agents — quotes, klines, financials, and more",
+  "module": "index.ts",
+  "type": "module",
+  "keywords": [
+    "xueqiu",
+    "snowball",
+    "stock",
+    "finance",
+    "china-market",
+    "a-shares",
+    "cli",
+    "ai-agent"
+  ],
+  "author": "baixianger",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/baixianger/snowball-cli.git"
+  },
+  "bin": {
+    "snowball": "cli.ts"
+  },
+  "files": [
+    "index.ts",
+    "cli.ts",
+    "lib/",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  }
+}
