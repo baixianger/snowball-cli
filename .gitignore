@@ -3,6 +3,7 @@ bun.lock
 
 # skill-creator is a local dev tool
 .agents/
+.claude/
 .qwen/
 .trae/
 skills/
