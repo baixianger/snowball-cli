@@ -94,15 +94,26 @@ async function ensureChrome(cdpUrl: string): Promise<void> {
           `${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe`,
           `${process.env["PROGRAMFILES(X86)"]}\\Google\\Chrome\\Application\\chrome.exe`,
           `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
-          "chrome.exe",
         ],
         linux: ["google-chrome", "google-chrome-stable", "chromium-browser"],
       };
       const candidates = defaults[platform()] ?? defaults.linux;
-      bin = candidates[0];
       const { existsSync } = await import("fs");
+      bin = "";
       for (const c of candidates) {
-        if (c.includes("/") || c.includes("\\") ? existsSync(c) : true) { bin = c; break; }
+        if (existsSync(c)) { bin = c; break; }
+      }
+      if (!bin) {
+        console.error("\n  Chrome not found.\n");
+        console.error("  Please set CHROME_PATH to your Chrome executable:\n");
+        if (platform() === "win32") {
+          console.error('    set CHROME_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"');
+        } else {
+          console.error("    export CHROME_PATH=/path/to/chrome");
+        }
+        console.error("\n  Or use --chrome flag:\n");
+        console.error("    snowball login --chrome /path/to/chrome\n");
+        process.exit(1);
       }
     }
 
