@@ -80,12 +80,25 @@ async function ensureChrome(cdpUrl: string): Promise<void> {
 
   if (!ready) {
     console.log("  Starting Chrome...");
-    const bins: Record<string, string> = {
-      darwin: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      win32: "chrome.exe",
-      linux: "google-chrome",
+    const bins: Record<string, string[]> = {
+      darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+      win32: [
+        `${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe`,
+        `${process.env["PROGRAMFILES(X86)"]}\\Google\\Chrome\\Application\\chrome.exe`,
+        `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+        "chrome.exe",
+      ],
+      linux: ["google-chrome", "google-chrome-stable", "chromium-browser"],
     };
-    const child = spawn(bins[platform()] ?? bins.linux, [
+    const candidates = bins[platform()] ?? bins.linux;
+    let bin = candidates[0];
+    for (const c of candidates) {
+      try {
+        const { existsSync } = await import("fs");
+        if (c.includes("/") || c.includes("\\") ? existsSync(c) : true) { bin = c; break; }
+      } catch { continue; }
+    }
+    const child = spawn(bin, [
       "--remote-debugging-port=9222",
       `--user-data-dir=${profileDir}`,
     ], { stdio: "ignore", detached: true });
