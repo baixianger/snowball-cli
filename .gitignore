@@ -1,0 +1,9 @@
+node_modules/
+bun.lock
+
+# skill-creator is a local dev tool
+.agents/
+.qwen/
+.trae/
+skills/
+skills-lock.json
