@@ -25,11 +25,19 @@
 
 封装[雪球](https://xueqiu.com) API 的命令行工具，JSON 输出，为 AI Agent 和脚本设计。
 
+## 安装
+
+```bash
+# 作为命令行工具
+bun add -g snowball-cli
+
+# 作为 AI Agent 技能（Claude Code、Cursor、Windsurf 等）
+npx skills add https://github.com/baixianger/snowball-cli
+```
+
 ## 快速开始
 
 ```bash
-# 安装
-bun add -g snowball-cli
 
 # 以下命令无需登录：
 snowball quote SH600519 SZ000858       # 实时行情

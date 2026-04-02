@@ -25,11 +25,19 @@
 
 A CLI that wraps [Xueqiu (雪球)](https://xueqiu.com) APIs into JSON for AI agents and scripts.
 
+## Install
+
+```bash
+# As a CLI tool
+bun add -g snowball-cli
+
+# As an AI agent skill (Claude Code, Cursor, Windsurf, etc.)
+npx skills add https://github.com/baixianger/snowball-cli
+```
+
 ## Quick start
 
 ```bash
-# Install
-bun add -g snowball-cli
 
 # No login needed for these:
 snowball quote SH600519 SZ000858       # Real-time quotes
