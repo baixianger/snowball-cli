@@ -99,9 +99,19 @@ async function ensureChrome(cdpUrl: string): Promise<void> {
       };
       const candidates = defaults[platform()] ?? defaults.linux;
       const { existsSync } = await import("fs");
+      const { execSync } = await import("child_process");
       bin = "";
       for (const c of candidates) {
-        if (existsSync(c)) { bin = c; break; }
+        // Absolute paths: check file exists. Bare names: check if on PATH.
+        if (c.includes("/") || c.includes("\\")) {
+          if (existsSync(c)) { bin = c; break; }
+        } else {
+          try {
+            const cmd = platform() === "win32" ? `where ${c}` : `which ${c}`;
+            execSync(cmd, { stdio: "ignore" });
+            bin = c; break;
+          } catch {}
+        }
       }
       if (!bin) {
         console.error("\n  Chrome not found.\n");
