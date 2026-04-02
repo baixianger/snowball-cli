@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+    name: Test on ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: CLI loads (help)
+        run: bun run index.ts --help
+
+      - name: Version flag
+        run: bun run index.ts -v
+
+      # Public commands (no auth needed)
+      - name: "quote: real-time (no auth)"
+        run: bun run index.ts quote SH600519
+
+      - name: "quote: multiple symbols"
+        run: bun run index.ts quote SH600519 SZ000858
+
+      - name: "market: indices overview (no auth)"
+        run: bun run index.ts market
+
+      - name: "fund: detail (no auth)"
+        run: bun run index.ts fund 110011
+
+      - name: "fund: NAV history (no auth)"
+        run: bun run index.ts fund 110011 --nav
+
+      - name: "fund: growth (no auth)"
+        run: bun run index.ts fund 110011 --growth
+
+      # Auth-required commands should fail gracefully
+      - name: "auth-required: graceful error"
+        run: |
+          bun run index.ts kline SH600519 2>&1 || true
+        shell: bash
+
+      - name: "status: shows not logged in"
+        run: bun run index.ts status
