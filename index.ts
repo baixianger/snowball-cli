@@ -215,6 +215,20 @@ const commands: Record<string, Record<string, Command>> = {
         console.log("\n  Token saved!\n");
       },
     },
+    logout: {
+      usage: "logout",
+      desc: "Remove saved token",
+      run: async () => {
+        const { existsSync, unlinkSync } = await import("fs");
+        const { TOKEN_PATH } = await import("./lib/auth");
+        if (existsSync(TOKEN_PATH)) {
+          unlinkSync(TOKEN_PATH);
+          console.log("\n  Token removed.\n");
+        } else {
+          console.log("\n  Not logged in.\n");
+        }
+      },
+    },
     status: {
       usage: "status",
       desc: "Check login status and verify token",
