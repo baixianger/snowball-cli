@@ -51,6 +51,17 @@ jobs:
       - name: "fund: growth (no auth)"
         run: bun run index.ts fund 110011 --growth
 
+      # Test QR generation (the cross-platform part of login)
+      - name: "qr: generate and render in terminal"
+        run: |
+          bun -e "
+            import QRCode from 'qrcode';
+            const text = await QRCode.toString('https://xueqiu.com/test', { type: 'terminal', small: true });
+            console.log(text);
+            console.log('QR render OK');
+          "
+        shell: bash
+
       # Auth-required commands should fail gracefully
       - name: "auth-required: graceful error"
         run: |
