@@ -256,28 +256,31 @@ snowball login --chrome /snap/bin/chromium
 
 In Docker containers or AI agent platforms (OpenClaw, etc.) where there's no browser:
 
+**New image:**
+
 ```dockerfile
-# Option 1: Use official Bun image
 FROM oven/bun:latest
 RUN bun add -g snowball-cli
-
-# Option 2: Add to existing image
-RUN curl -fsSL https://bun.sh/install | bash && \
-    ~/.bun/bin/bun add -g snowball-cli
 ```
 
-Then inject your token at runtime:
+**Running container with persistent volume** (e.g. OpenClaw):
 
 ```bash
-# From host machine
-docker exec <container> snowball import $(snowball export)
+# Install bun + snowball-cli into the persistent directory
+docker exec <container> bash -c "
+  export BUN_INSTALL=/data/.bun
+  curl -fsSL https://bun.sh/install | bash
+  /data/.bun/bin/bun add -g snowball-cli
+  ln -sf /data/.snowball-cli ~/.snowball-cli
+"
 
-# Or via environment variable in docker-compose.yml
-environment:
-  - SNOWBALL_TOKEN=<base64 from snowball export>
+# Import token from host
+docker exec <container> /data/.bun/bin/snowball import $(snowball export)
 ```
 
-For OpenClaw AgentSkill config, install the skill:
+Everything lives in `/data/` — survives container restarts.
+
+**Install as OpenClaw AgentSkill:**
 
 ```bash
 bunx skills add https://github.com/baixianger/snowball-cli

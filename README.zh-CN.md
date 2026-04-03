@@ -256,28 +256,31 @@ snowball login --chrome /snap/bin/chromium
 
 在 Docker 容器或 AI Agent 平台（OpenClaw 等）中没有浏览器：
 
+**新镜像：**
+
 ```dockerfile
-# 方式 1：使用官方 Bun 镜像
 FROM oven/bun:latest
 RUN bun add -g snowball-cli
-
-# 方式 2：在已有镜像中安装
-RUN curl -fsSL https://bun.sh/install | bash && \
-    ~/.bun/bin/bun add -g snowball-cli
 ```
 
-运行时注入 token：
+**已运行的容器 + 持久化目录**（如 OpenClaw）：
 
 ```bash
-# 从宿主机注入
-docker exec <容器> snowball import $(snowball export)
+# 在持久化目录中安装 bun + snowball-cli
+docker exec <容器> bash -c "
+  export BUN_INSTALL=/data/.bun
+  curl -fsSL https://bun.sh/install | bash
+  /data/.bun/bin/bun add -g snowball-cli
+  ln -sf /data/.snowball-cli ~/.snowball-cli
+"
 
-# 或通过 docker-compose.yml 环境变量
-environment:
-  - SNOWBALL_TOKEN=<snowball export 输出的 base64>
+# 从宿主机导入 token
+docker exec <容器> /data/.bun/bin/snowball import $(snowball export)
 ```
 
-作为 OpenClaw AgentSkill 安装：
+全部装在 `/data/` 下，容器重启不丢。
+
+**作为 OpenClaw AgentSkill 安装：**
 
 ```bash
 bunx skills add https://github.com/baixianger/snowball-cli
