@@ -229,6 +229,38 @@ const commands: Record<string, Record<string, Command>> = {
         }
       },
     },
+    export: {
+      usage: "export",
+      desc: "Print token as base64 (for transfer to VPS/headless server)",
+      run: async () => {
+        const token = loadToken();
+        if (!token) {
+          console.error("\n  Not logged in. Run: snowball login\n");
+          process.exit(1);
+        }
+        const b64 = Buffer.from(JSON.stringify(token)).toString("base64");
+        console.log(b64);
+      },
+    },
+    import: {
+      usage: "import <base64>",
+      desc: "Import token from base64 (from snowball export)",
+      run: async () => {
+        const b64 = requireArg(1, "Usage: snowball import <base64-string>\n  Get it from: snowball export");
+        try {
+          const token = JSON.parse(Buffer.from(b64, "base64").toString("utf-8"));
+          if (!token.cookie?.includes("xq_a_token")) {
+            console.error("\n  Invalid token: missing xq_a_token\n");
+            process.exit(1);
+          }
+          saveToken(token);
+          console.log("\n  Token imported!\n");
+        } catch {
+          console.error("\n  Invalid base64 string.\n");
+          process.exit(1);
+        }
+      },
+    },
     status: {
       usage: "status",
       desc: "Check login status and verify token",
