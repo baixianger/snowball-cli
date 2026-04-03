@@ -40,8 +40,7 @@
     "snowball": "cli.js"
   },
   "scripts": {
-    "build": "bun build index.ts --outdir dist --target node",
-    "prepublishOnly": "bun run build"
+    "build": "bun build index.ts --outdir dist --target node"
   },
   "files": [
     "dist/",
