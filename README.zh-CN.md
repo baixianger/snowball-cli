@@ -31,7 +31,7 @@
 npm install -g snowball-cli     # 或：bun add -g snowball-cli
 ```
 
-> **VPS / Docker / OpenClaw？** 请看 [安装与授权指南](docs/setup.zh-CN.md)。
+> **VPS / Docker / OpenClaw？** 请看 [安装与授权指南](https://github.com/baixianger/snowball-cli/blob/main/docs/setup.zh-CN.md)。
 
 ## 快速开始
 
@@ -65,7 +65,7 @@ snowball kol SH600519
 
 ## 命令速查
 
-完整命令详解请看 [命令行参考](docs/commands.zh-CN.md)。
+完整命令详解请看 [命令行参考](https://github.com/baixianger/snowball-cli/blob/main/docs/commands.zh-CN.md)。
 
 ### 行情
 
