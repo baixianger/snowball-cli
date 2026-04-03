@@ -19,8 +19,8 @@ import { qrLogin } from "./lib/qr-terminal";
 import * as api from "./lib/api";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CDP_URL = Bun.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://127.0.0.1:9222";
-const MODE = Bun.argv[2];
+const CDP_URL = process.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://127.0.0.1:9222";
+const MODE = process.argv[2];
 const VERSION = "0.2.0";
 
 // ═══════════════════════════════════════════════════════════════
@@ -36,16 +36,16 @@ function out(data: any) {
 }
 
 function arg(n: number): string | undefined {
-  return Bun.argv[n + 2]; // argv[0]=bun, argv[1]=script, argv[2]=command
+  return process.argv[n + 2]; // argv[0]=bun, argv[1]=script, argv[2]=command
 }
 
 function flag(name: string): string | undefined {
-  const i = Bun.argv.indexOf(`--${name}`);
-  return i !== -1 && i + 1 < Bun.argv.length ? Bun.argv[i + 1] : undefined;
+  const i = process.argv.indexOf(`--${name}`);
+  return i !== -1 && i + 1 < process.argv.length ? process.argv[i + 1] : undefined;
 }
 
 function hasFlag(name: string): boolean {
-  return Bun.argv.includes(`--${name}`);
+  return process.argv.includes(`--${name}`);
 }
 
 function requireArg(n: number, usage: string): string {
@@ -62,7 +62,7 @@ function count(def = 10): number {
 }
 
 function symbols(): string[] {
-  return Bun.argv.slice(4).filter(a => !a.startsWith("-"));
+  return process.argv.slice(4).filter(a => !a.startsWith("-"));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -156,7 +156,7 @@ async function ensureChrome(cdpUrl: string): Promise<void> {
     child.unref();
 
     for (let i = 0; i < 15; i++) {
-      await Bun.sleep(1000);
+      await new Promise(r => setTimeout(r, 1000));
       try { await fetch(`${cdpUrl}/json/version`); ready = true; break; } catch {}
     }
     if (!ready) { console.error("  Chrome failed to start.\n"); process.exit(1); }
