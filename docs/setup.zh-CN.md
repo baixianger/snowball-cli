@@ -1,4 +1,4 @@
-# 部署指南
+# 安装与授权指南
 
 ## 本地桌面（macOS / Windows / Linux）
 

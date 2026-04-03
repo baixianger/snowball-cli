@@ -31,7 +31,7 @@ A CLI that wraps [Xueqiu (雪球)](https://xueqiu.com) APIs into JSON for AI age
 npm install -g snowball-cli     # or: bun add -g snowball-cli
 ```
 
-> **VPS / Docker / OpenClaw?** See the [Deployment Guide](docs/deployment.md).
+> **VPS / Docker / OpenClaw?** See the [Setup Guide](docs/setup.md).
 
 ## Quick start
 

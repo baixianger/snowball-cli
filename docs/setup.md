@@ -1,4 +1,4 @@
-# Deployment Guide
+# Setup Guide — Install & Auth
 
 ## Local desktop (macOS / Windows / Linux)
 
