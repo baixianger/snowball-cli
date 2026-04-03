@@ -4990,7 +4990,7 @@ async function fundGrowth(code, period = "ty") {
 var __dirname2 = dirname(fileURLToPath(import.meta.url));
 var CDP_URL = process.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://127.0.0.1:9222";
 var MODE = process.argv[2];
-var VERSION = "0.2.0";
+var VERSION = "0.3.1";
 function showLogo() {
   for (const base of [__dirname2, join2(__dirname2, "..")]) {
     try {

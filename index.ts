@@ -21,7 +21,7 @@ import * as api from "./lib/api";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CDP_URL = process.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://127.0.0.1:9222";
 const MODE = process.argv[2];
-const VERSION = "0.2.0";
+const VERSION = "0.3.1";
 
 // ═══════════════════════════════════════════════════════════════
 //  Helpers
