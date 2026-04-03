@@ -28,7 +28,9 @@ const VERSION = "0.2.0";
 // ═══════════════════════════════════════════════════════════════
 
 function showLogo() {
-  try { console.log(readFileSync(join(__dirname, "lib", "logo.ansi"), "utf-8")); } catch {}
+  for (const base of [__dirname, join(__dirname, "..")]) {
+    try { console.log(readFileSync(join(base, "lib", "logo.ansi"), "utf-8")); return; } catch {}
+  }
 }
 
 function out(data: any) {

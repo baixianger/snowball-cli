@@ -4992,9 +4992,12 @@ var CDP_URL = process.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://12
 var MODE = process.argv[2];
 var VERSION = "0.2.0";
 function showLogo() {
-  try {
-    console.log(readFileSync2(join2(__dirname2, "lib", "logo.ansi"), "utf-8"));
-  } catch {}
+  for (const base of [__dirname2, join2(__dirname2, "..")]) {
+    try {
+      console.log(readFileSync2(join2(base, "lib", "logo.ansi"), "utf-8"));
+      return;
+    } catch {}
+  }
 }
 function out(data) {
   console.log(JSON.stringify(data, null, 2));
