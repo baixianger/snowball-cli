@@ -263,26 +263,26 @@ FROM oven/bun:latest
 RUN bun add -g snowball-cli
 ```
 
-**已运行的容器 + 持久化目录**（如 OpenClaw）：
+**已运行的容器**（如 OpenClaw，持久化目录 `/home/node/.openclaw`）：
 
 ```bash
-# 在持久化目录中安装 bun + snowball-cli
+# 在 OpenClaw 持久化目录中安装 bun + snowball-cli
 docker exec <容器> bash -c "
-  export BUN_INSTALL=/data/.bun
+  export BUN_INSTALL=/home/node/.openclaw/.bun
   curl -fsSL https://bun.sh/install | bash
-  /data/.bun/bin/bun add -g snowball-cli
-  ln -sf /data/.snowball-cli ~/.snowball-cli
+  /home/node/.openclaw/.bun/bin/bun add -g snowball-cli
 "
 
 # 从宿主机导入 token
-docker exec <容器> /data/.bun/bin/snowball import $(snowball export)
+docker exec <容器> /home/node/.openclaw/.bun/bin/snowball import $(snowball export)
 ```
 
-全部装在 `/data/` 下，容器重启不丢。
+全部装在 `/home/node/.openclaw/` 下，容器重启不丢。
 
-**作为 OpenClaw AgentSkill 安装：**
+**作为 AgentSkill 安装**（在容器内或宿主机挂载的 workspace 目录中）：
 
 ```bash
+cd /home/node/.openclaw/workspace    # 或宿主机上的挂载路径
 bunx skills add https://github.com/baixianger/snowball-cli
 ```
 

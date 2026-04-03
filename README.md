@@ -263,26 +263,26 @@ FROM oven/bun:latest
 RUN bun add -g snowball-cli
 ```
 
-**Running container with persistent volume** (e.g. OpenClaw):
+**Running container** (e.g. OpenClaw, persistent dir at `/home/node/.openclaw`):
 
 ```bash
-# Install bun + snowball-cli into the persistent directory
+# Install bun + snowball-cli into OpenClaw's persistent workspace
 docker exec <container> bash -c "
-  export BUN_INSTALL=/data/.bun
+  export BUN_INSTALL=/home/node/.openclaw/.bun
   curl -fsSL https://bun.sh/install | bash
-  /data/.bun/bin/bun add -g snowball-cli
-  ln -sf /data/.snowball-cli ~/.snowball-cli
+  /home/node/.openclaw/.bun/bin/bun add -g snowball-cli
 "
 
 # Import token from host
-docker exec <container> /data/.bun/bin/snowball import $(snowball export)
+docker exec <container> /home/node/.openclaw/.bun/bin/snowball import $(snowball export)
 ```
 
-Everything lives in `/data/` — survives container restarts.
+Everything lives under `/home/node/.openclaw/` — survives container restarts.
 
-**Install as OpenClaw AgentSkill:**
+**Install as AgentSkill** (inside container or on host with OpenClaw workspace mounted):
 
 ```bash
+cd /home/node/.openclaw/workspace    # or your mounted workspace path
 bunx skills add https://github.com/baixianger/snowball-cli
 ```
 
