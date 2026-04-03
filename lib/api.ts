@@ -398,11 +398,31 @@ export async function stockKOLs(symbol: string, count = 10): Promise<any> {
 }
 
 /** User timeline — recent posts by a specific user */
-export async function userPosts(userId: string, count = 10, page = 1): Promise<any> {
-  const data = await request("/statuses/user_timeline.json", {
-    user_id: userId, page, count,
-  }, XUEQIU_URL);
-  return (data.statuses || []).map(formatPost);
+export async function userPosts(userId: string, count = 10, page = 1, filter?: "original" | "article"): Promise<any> {
+  if (!filter) {
+    const data = await request("/statuses/user_timeline.json", {
+      user_id: userId, page, count,
+    }, XUEQIU_URL);
+    return (data.statuses || []).map(formatPost);
+  }
+  const results: any[] = [];
+  let p = page;
+  while (results.length < count) {
+    const batchSize = Math.min(count * 3, 100);
+    const data = await request("/statuses/user_timeline.json", {
+      user_id: userId, page: p, count: batchSize,
+    }, XUEQIU_URL);
+    const statuses = data.statuses || [];
+    if (statuses.length === 0) break;
+    for (const post of statuses) {
+      if (filter === "original" && (post.retweet_status_id !== 0 || post.type == null)) continue;
+      if (filter === "article" && (!post.title || post.type !== "3")) continue;
+      results.push(formatPost(post));
+      if (results.length >= count) break;
+    }
+    p++;
+  }
+  return results;
 }
 
 /** User profile */
@@ -487,4 +507,69 @@ export async function fundNav(code: string, page = 1, size = 30): Promise<any> {
 export async function fundGrowth(code: string, period = "ty"): Promise<any> {
   const data = await requestPublic(`/djapi/fund/growth/${code}`, { day: period }, DANJUAN_URL);
   return data.data;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  FOLLOWING / FRIENDS
+// ═══════════════════════════════════════════════════════════════
+
+/** List following groups */
+export async function followingGroups(): Promise<any> {
+  const data = await request("/friendships/groups.json", {}, XUEQIU_URL);
+  return data;
+}
+
+/** List all following users (paginated, auto-dedup) */
+export async function followingList(gid?: number): Promise<any[]> {
+  const seen = new Set<number>();
+  const all: any[] = [];
+  if (gid != null && gid !== 0) {
+    // Use groups/members.json for specific group
+    for (let page = 1; page <= 10; page++) {
+      const data = await request("/friendships/groups/members.json", { gid, page, count: 20 }, XUEQIU_URL);
+      const users = data.users || [];
+      if (users.length === 0) break;
+      for (const u of users) {
+        if (seen.has(u.id)) continue;
+        seen.add(u.id);
+        all.push({ id: u.id, name: u.screen_name, followers: u.followers_count, verified: u.verified_description || "" });
+      }
+      if (page >= (data.maxPage || 1)) break;
+    }
+  } else {
+    // Use friends.json with pageNo for all
+    for (let page = 1; page <= 10; page++) {
+      const data = await request("/friendships/friends.json", { page, pageNo: page, count: 20 }, XUEQIU_URL);
+      const friends = data.friends || [];
+      if (friends.length === 0) break;
+      for (const f of friends) {
+        if (seen.has(f.id)) continue;
+        seen.add(f.id);
+        all.push({ id: f.id, name: f.screen_name, followers: f.followers_count, verified: f.verified_description || "" });
+      }
+      if (page >= (data.maxPage || 1)) break;
+    }
+  }
+  return all;
+}
+
+/** Digest: fetch latest posts from all following users */
+export async function followingDigest(
+  countPerUser = 5,
+  filter?: "original" | "article",
+  gid?: number,
+): Promise<any[]> {
+  const users = await followingList(gid);
+  const results: any[] = [];
+  for (const user of users) {
+    try {
+      const posts = await userPosts(String(user.id), countPerUser, 1, filter);
+      if (posts.length > 0) {
+        results.push({ user: user.name, user_id: user.id, followers: user.followers, posts });
+      }
+    } catch {}
+    // Rate limit: small delay between users
+    await new Promise(r => setTimeout(r, 300));
+  }
+  return results;
 }

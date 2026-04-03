@@ -7,7 +7,7 @@
  *   2. Manual: user pastes token from browser devtools
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -25,14 +25,14 @@ export interface TokenData {
 
 /** Save token to disk */
 export function saveToken(data: TokenData): void {
-  writeFileSync(TOKEN_PATH, JSON.stringify(data, null, 2));
+  writeFileSync(TOKEN_PATH, JSON.stringify(data, null, 2), "utf-8");
 }
 
 /** Load saved token */
 export function loadToken(): TokenData | null {
   if (!existsSync(TOKEN_PATH)) return null;
   try {
-    const raw = require(TOKEN_PATH);
+    const raw = JSON.parse(readFileSync(TOKEN_PATH, "utf-8"));
     return raw as TokenData;
   } catch {
     return null;

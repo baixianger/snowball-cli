@@ -88,13 +88,12 @@ async function ensureChrome(cdpUrl: string): Promise<void> {
     if (userPath) {
       bin = userPath;
     } else {
-      const chromeSub = join("Google", "Chrome", "Application", "chrome.exe");
       const defaults: Record<string, string[]> = {
         darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
         win32: [
-          ...(process.env.PROGRAMFILES ? [join(process.env.PROGRAMFILES, chromeSub)] : []),
-          ...(process.env["PROGRAMFILES(X86)"] ? [join(process.env["PROGRAMFILES(X86)"], chromeSub)] : []),
-          ...(process.env.LOCALAPPDATA ? [join(process.env.LOCALAPPDATA, chromeSub)] : []),
+          join(process.env.PROGRAMFILES ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
+          join(process.env["PROGRAMFILES(X86)"] ?? "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
+          join(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "Application", "chrome.exe"),
         ],
         linux: ["google-chrome", "google-chrome-stable", "chromium-browser"],
       };
@@ -405,9 +404,12 @@ const commands: Record<string, Record<string, Command>> = {
       run: async () => out(await api.stockKOLs(requireArg(1, "Usage: snowball kol SH600519"), count(10))),
     },
     user: {
-      usage: "user <user_id> [--count 10]",
-      desc: "A user's recent posts",
-      run: async () => out(await api.userPosts(requireArg(1, "Usage: snowball user <user_id>"), count(10))),
+      usage: "user <user_id> [--count 10] [--original] [--article]",
+      desc: "A user's recent posts (--original: no replies/retweets, --article: long-form only)",
+      run: async () => {
+        const filter = hasFlag("article") ? "article" as const : hasFlag("original") ? "original" as const : undefined;
+        out(await api.userPosts(requireArg(1, "Usage: snowball user <user_id>"), count(10), 1, filter));
+      },
     },
     profile: {
       usage: "profile <user_id>",
@@ -448,6 +450,35 @@ const commands: Record<string, Record<string, Command>> = {
       run: async () => {
         const code = requireArg(1, "Usage: snowball fund 110011 [--nav] [--growth]");
         out(hasFlag("nav") ? await api.fundNav(code) : hasFlag("growth") ? await api.fundGrowth(code) : await api.fund(code));
+      },
+    },
+  },
+
+  // ── Following ────────────────────────────────────────────────
+  "Following": {
+    following: {
+      usage: "following",
+      desc: "List all your following users",
+      run: async () => out(await api.followingList()),
+    },
+    digest: {
+      usage: "digest [--original] [--article] [--group <name>] [--count 5]",
+      desc: "Latest posts from following users (--group to filter by group)",
+      run: async () => {
+        const filter = hasFlag("article") ? "article" as const : hasFlag("original") ? "original" as const : undefined;
+        const groupName = flag("group");
+        let gid: number | undefined;
+        if (groupName) {
+          const groups = await api.followingGroups();
+          const match = groups.find((g: any) => g.name === groupName);
+          if (!match) {
+            console.error(`\n  Group "${groupName}" not found.`);
+            process.exit(1);
+          }
+          gid = match.id;
+        }
+        const results = await api.followingDigest(count(5), filter, gid);
+        out(results);
       },
     },
   },
