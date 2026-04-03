@@ -63,8 +63,12 @@ snowball kol SH600519
 |---|---|
 | `snowball login` | 二维码登录（终端内显示） |
 | `snowball login --manual` | 二维码登录（Chrome 窗口扫码） |
+| `snowball login --chrome <路径>` | 指定 Chrome/Chromium 路径 |
 | `snowball token <cookie>` | 手动设置 token |
 | `snowball status` | 查看登录状态并验证 token |
+| `snowball logout` | 删除已保存的 token |
+| `snowball export` | 导出 token（base64，用于传输） |
+| `snowball import <base64>` | 从其他机器导入 token |
 
 ### 行情
 
@@ -184,7 +188,8 @@ snowball trending | jq '.[].author'
 ```
 snowball login
   │
-  ├─ 后台启动 Chrome → 打开 xueqiu.com → 通过 WAF 验证
+  ├─ 查找 Chrome/Chromium（CHROME_PATH > --chrome > 自动检测）
+  ├─ 启动浏览器（后台运行，VPS 上自动无头）→ 打开 xueqiu.com → 通过 WAF
   ├─ 调用雪球 API → 生成二维码 → 终端渲染
   ├─ 等待扫码 → 每 2.5 秒轮询状态
   ├─ 过期？ → 自动刷新（最多 3 次）
@@ -192,7 +197,33 @@ snowball login
   └─ 成功 → 保存 Cookie 到 ~/.snowball-cli/token.json
 ```
 
-备用：`snowball login --manual` 直接打开 Chrome 窗口扫码。
+浏览器检测顺序：`CHROME_PATH` 环境变量 → `--chrome` 参数 → Chrome → Chromium → 平台默认路径
+
+自动无头：Linux 上没有 `DISPLAY` 时，Chrome 自动以 `--headless` 模式启动。
+
+## 无头服务器 / VPS 部署
+
+不需要浏览器 — 从本地机器传输 token：
+
+```bash
+# 一行搞定：本地导出，VPS 导入
+ssh vps "snowball import $(snowball export)"
+
+# 或者分步
+snowball export                    # 本地打印 base64
+ssh vps "snowball import <base64>" # VPS 上粘贴
+```
+
+也可以在 VPS 上装 Chromium 直接扫码登录：
+
+```bash
+# Debian/Ubuntu
+apt install -y chromium-browser
+snowball login    # 自动检测无头模式，二维码在 SSH 终端显示
+
+# 指定路径
+snowball login --chrome /snap/bin/chromium
+```
 
 ## 协议
 

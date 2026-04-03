@@ -63,8 +63,12 @@ snowball kol SH600519
 |---|---|
 | `snowball login` | QR code login (shown in terminal) |
 | `snowball login --manual` | QR code login (scan in Chrome window) |
+| `snowball login --chrome <path>` | Specify custom Chrome/Chromium path |
 | `snowball token <cookie>` | Set token manually |
 | `snowball status` | Check login status + verify token |
+| `snowball logout` | Remove saved token |
+| `snowball export` | Print token as base64 (for transfer) |
+| `snowball import <base64>` | Import token from another machine |
 
 ### Market
 
@@ -184,7 +188,8 @@ snowball trending | jq '.[].author'
 ```
 snowball login
   │
-  ├─ Start Chrome (background) → visit xueqiu.com → solve WAF
+  ├─ Find Chrome/Chromium (CHROME_PATH > --chrome > auto-detect)
+  ├─ Start browser (background, headless on VPS) → visit xueqiu.com → solve WAF
   ├─ Call Xueqiu API → generate QR code → render in terminal
   ├─ Wait for scan → poll status every 2.5s
   ├─ QR expired? → auto-regenerate (up to 3x)
@@ -192,7 +197,33 @@ snowball login
   └─ Success → save cookies to ~/.snowball-cli/token.json
 ```
 
-Alternative: `snowball login --manual` opens Chrome window directly.
+Browser detection order: `CHROME_PATH` env → `--chrome` flag → Chrome → Chromium → platform defaults.
+
+Auto headless: on Linux without `DISPLAY`, Chrome launches with `--headless` automatically.
+
+## Headless / VPS deployment
+
+No Chrome needed — transfer your token from a local machine:
+
+```bash
+# One-liner: export from local, import on VPS
+ssh vps "snowball import $(snowball export)"
+
+# Or step by step
+snowball export                    # prints base64 on local machine
+ssh vps "snowball import <base64>" # paste on VPS
+```
+
+Alternatively, install Chromium on the VPS and login there:
+
+```bash
+# Debian/Ubuntu
+apt install -y chromium-browser
+snowball login    # auto-detects headless, QR shows in SSH terminal
+
+# Custom path
+snowball login --chrome /snap/bin/chromium
+```
 
 ## License
 
