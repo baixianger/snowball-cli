@@ -127,10 +127,16 @@ async function ensureChrome(cdpUrl: string): Promise<void> {
       }
     }
 
-    const child = spawn(bin, [
+    // Headless detection: no DISPLAY on Linux = headless server
+    const isHeadless = platform() === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+    const chromeArgs = [
       "--remote-debugging-port=9222",
       `--user-data-dir=${profileDir}`,
-    ], { stdio: "ignore", detached: true });
+      ...(isHeadless ? ["--headless=new", "--no-sandbox", "--disable-gpu"] : []),
+    ];
+    if (isHeadless) console.log("  Headless mode detected (no DISPLAY)");
+
+    const child = spawn(bin, chromeArgs, { stdio: "ignore", detached: true });
     child.unref();
 
     for (let i = 0; i < 15; i++) {
