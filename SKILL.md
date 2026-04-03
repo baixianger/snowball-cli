@@ -34,29 +34,9 @@ bun add -g snowball-cli
 
 大部分命令需要雪球登录态。上面列出的 `quote`、`market`、`fund` 无需登录。
 
-```bash
-snowball login                       # 终端内二维码，用雪球 App 扫码
-snowball login --manual              # 在 Chrome 窗口中扫码
-snowball login --chrome /path/to/x   # 指定 Chrome/Chromium 路径
-snowball token "xq_a_token=x; u=x"   # 手动粘贴 cookie
-```
+遇到「Not logged in」错误时，提示用户自行运行 `snowball login` 完成扫码登录。**不要代替用户执行 login / logout / export / import 等认证命令。**
 
-设置 `CHROME_PATH` 环境变量可以省去每次 `--chrome`。
-
-**跨机器传输 token（VPS / Docker）：**
-
-```bash
-snowball export                      # 导出 token 为 base64
-snowball import <base64>             # 导入 token
-ssh vps "snowball import $(snowball export)"  # 一行搞定
-```
-
-**管理 token：**
-
-```bash
-snowball status                      # 验证 token 是否有效
-snowball logout                      # 删除 token
-```
+可以用 `snowball status` 检查当前 token 状态。
 
 ## 代码格式
 
