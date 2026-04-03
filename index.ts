@@ -89,13 +89,23 @@ async function ensureChrome(cdpUrl: string): Promise<void> {
       bin = userPath;
     } else {
       const defaults: Record<string, string[]> = {
-        darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+        darwin: [
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ],
         win32: [
           join(process.env.PROGRAMFILES ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
           join(process.env["PROGRAMFILES(X86)"] ?? "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
           join(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "Application", "chrome.exe"),
+          join(process.env.PROGRAMFILES ?? "C:\\Program Files", "Chromium", "Application", "chrome.exe"),
+          join(process.env.LOCALAPPDATA ?? "", "Chromium", "Application", "chrome.exe"),
         ],
-        linux: ["google-chrome", "google-chrome-stable", "chromium-browser"],
+        linux: [
+          "google-chrome", "google-chrome-stable",
+          "chromium-browser", "chromium",
+          "/usr/bin/chromium-browser", "/usr/bin/chromium",
+          "/snap/bin/chromium",
+        ],
       };
       const candidates = defaults[platform()] ?? defaults.linux;
       const { existsSync } = await import("fs");
@@ -114,15 +124,21 @@ async function ensureChrome(cdpUrl: string): Promise<void> {
         }
       }
       if (!bin) {
-        console.error("\n  Chrome not found.\n");
-        console.error("  Please set CHROME_PATH to your Chrome executable:\n");
-        if (platform() === "win32") {
-          console.error('    set CHROME_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"');
+        console.error("\n  Chrome / Chromium not found.\n");
+        if (platform() === "linux") {
+          console.error("  Install Chromium:\n");
+          console.error("    apt install -y chromium-browser   # Debian/Ubuntu");
+          console.error("    yum install -y chromium           # CentOS/RHEL");
+          console.error("    snap install chromium              # Snap\n");
+        } else if (platform() === "win32") {
+          console.error("  Set CHROME_PATH:\n");
+          console.error('    set CHROME_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"\n');
         } else {
-          console.error("    export CHROME_PATH=/path/to/chrome");
+          console.error("  Install Chrome or Chromium, or set CHROME_PATH:\n");
+          console.error("    export CHROME_PATH=/path/to/chrome\n");
         }
-        console.error("\n  Or use --chrome flag:\n");
-        console.error("    snowball login --chrome /path/to/chrome\n");
+        console.error("  Or use --chrome flag:  snowball login --chrome /path/to/chrome");
+        console.error("  Or skip browser:       snowball import $(snowball export)  # from another machine\n");
         process.exit(1);
       }
     }
