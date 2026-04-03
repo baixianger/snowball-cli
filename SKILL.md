@@ -34,7 +34,10 @@ bun add -g snowball-cli
 
 大部分命令需要雪球登录态。上面列出的 `quote`、`market`、`fund` 无需登录。
 
-遇到「Not logged in」错误时，提示用户自行运行 `snowball login` 完成扫码登录。**不要代替用户执行 login / logout / export / import 等认证命令。**
+遇到「Not logged in」错误时，提示用户自行完成登录。**不要代替用户执行认证命令。** 告知用户以下方式：
+
+- `snowball login` — 用雪球 App 扫码登录（需要 Chrome/Chromium）
+- `snowball export` / `snowball import <base64>` — 从已登录的机器导入 token
 
 可以用 `snowball status` 检查当前 token 状态。
 
