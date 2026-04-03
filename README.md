@@ -35,6 +35,9 @@ bun add -g snowball-cli
 # AI agent skill (Claude Code, Cursor, Windsurf, etc.)
 npx skills add https://github.com/baixianger/snowball-cli     # or
 bunx skills add https://github.com/baixianger/snowball-cli
+
+# OpenClaw agent
+clawhub install baixianger/snowball-cli
 ```
 
 ## Quick start
@@ -228,62 +231,80 @@ Browser detection order: `CHROME_PATH` env → `--chrome` flag → Chrome → Ch
 
 Auto headless: on Linux without `DISPLAY`, Chrome launches with `--headless` automatically.
 
-## Headless / VPS deployment
+## Deployment guide
 
-No Chrome needed — transfer your token from a local machine:
-
-```bash
-# One-liner: export from local, import on VPS
-ssh vps "snowball import $(snowball export)"
-
-# Or step by step
-snowball export                    # prints base64 on local machine
-ssh vps "snowball import <base64>" # paste on VPS
-```
-
-Alternatively, install Chromium on the VPS and login there:
+### Local desktop (macOS / Windows / Linux)
 
 ```bash
-# Debian/Ubuntu
-apt install -y chromium-browser
-snowball login    # auto-detects headless, QR shows in SSH terminal
-
-# Custom path
-snowball login --chrome /snap/bin/chromium
+bun add -g snowball-cli
+snowball login    # QR in terminal, simplest
 ```
 
-## Docker / OpenClaw integration
+### VPS (headless server)
 
-In Docker containers or AI agent platforms (OpenClaw, etc.) where there's no browser:
+**Option A: Import token from local (recommended, no browser needed)**
 
-**New image:**
+```bash
+ssh vps "curl -fsSL https://bun.sh/install | bash && ~/.bun/bin/bun add -g snowball-cli"
+ssh vps "~/.bun/bin/snowball import $(snowball export)"
+```
+
+**Option B: Install Chromium on VPS and login there**
+
+```bash
+ssh vps "apt install -y chromium-browser"
+ssh vps "~/.bun/bin/snowball login"    # auto-headless, QR in SSH terminal
+```
+
+### Docker container
+
+```bash
+docker exec <container> bash -c "
+  curl -fsSL https://bun.sh/install | bash
+  ~/.bun/bin/bun add -g snowball-cli
+"
+docker exec <container> ~/.bun/bin/snowball import $(snowball export)
+```
+
+For persistence, install bun into a mounted volume (see OpenClaw section below).
+
+### VPS + Docker (e.g. OpenClaw on VPS)
+
+```bash
+# Install inside Docker container on VPS
+ssh vps "docker exec <container> bash -c '
+  export BUN_INSTALL=/home/node/.openclaw/.bun
+  curl -fsSL https://bun.sh/install | bash
+  /home/node/.openclaw/.bun/bin/bun add -g snowball-cli
+'"
+
+# Import token: local → VPS → Docker container
+ssh vps "docker exec <container> /home/node/.openclaw/.bun/bin/snowball import $(snowball export)"
+```
+
+## OpenClaw integration
+
+**Local OpenClaw:**
+
+```bash
+clawhub install baixianger/snowball-cli
+```
+
+**Docker OpenClaw** (persistent dir `/home/node/.openclaw`):
+
+```bash
+# Install AgentSkill
+docker exec <container> bash -c "
+  cd /home/node/.openclaw/workspace
+  /home/node/.openclaw/.bun/bin/bunx skills add https://github.com/baixianger/snowball-cli
+"
+```
+
+**Custom Docker image:**
 
 ```dockerfile
 FROM oven/bun:latest
 RUN bun add -g snowball-cli
-```
-
-**Running container** (e.g. OpenClaw, persistent dir at `/home/node/.openclaw`):
-
-```bash
-# Install bun + snowball-cli into OpenClaw's persistent workspace
-docker exec <container> bash -c "
-  export BUN_INSTALL=/home/node/.openclaw/.bun
-  curl -fsSL https://bun.sh/install | bash
-  /home/node/.openclaw/.bun/bin/bun add -g snowball-cli
-"
-
-# Import token from host
-docker exec <container> /home/node/.openclaw/.bun/bin/snowball import $(snowball export)
-```
-
-Everything lives under `/home/node/.openclaw/` — survives container restarts.
-
-**Install as AgentSkill** (inside container or on host with OpenClaw workspace mounted):
-
-```bash
-cd /home/node/.openclaw/workspace    # or your mounted workspace path
-bunx skills add https://github.com/baixianger/snowball-cli
 ```
 
 ## License

@@ -35,6 +35,9 @@ bun add -g snowball-cli
 # AI Agent 技能（Claude Code、Cursor、Windsurf 等）
 npx skills add https://github.com/baixianger/snowball-cli     # 或
 bunx skills add https://github.com/baixianger/snowball-cli
+
+# OpenClaw agent
+clawhub install baixianger/snowball-cli
 ```
 
 ## 快速开始
@@ -228,62 +231,119 @@ snowball login
 
 自动无头：Linux 上没有 `DISPLAY` 时，Chrome 自动以 `--headless` 模式启动。
 
-## 无头服务器 / VPS 部署
+## 部署指南
 
-不需要浏览器 — 从本地机器传输 token：
+### 本地桌面（macOS / Windows / Linux 桌面）
 
 ```bash
-# 一行搞定：本地导出，VPS 导入
-ssh vps "snowball import $(snowball export)"
-
-# 或者分步
-snowball export                    # 本地打印 base64
-ssh vps "snowball import <base64>" # VPS 上粘贴
+bun add -g snowball-cli
+snowball login    # 终端内扫码，最简单
 ```
 
-也可以在 VPS 上装 Chromium 直接扫码登录：
+### VPS（无头服务器）
+
+**方式 A：从本地导入 token（推荐，不需要浏览器）**
+
+```bash
+# 先在 VPS 上装 snowball-cli
+ssh vps "curl -fsSL https://bun.sh/install | bash && ~/.bun/bin/bun add -g snowball-cli"
+
+# 一行导入 token
+ssh vps "~/.bun/bin/snowball import $(snowball export)"
+```
+
+**方式 B：VPS 上装 Chromium 直接登录**
 
 ```bash
 # Debian/Ubuntu
-apt install -y chromium-browser
-snowball login    # 自动检测无头模式，二维码在 SSH 终端显示
-
-# 指定路径
-snowball login --chrome /snap/bin/chromium
+ssh vps "apt install -y chromium-browser"
+ssh vps "~/.bun/bin/snowball login"    # 自动无头模式，QR 在 SSH 终端显示
 ```
 
-## Docker / OpenClaw 集成
-
-在 Docker 容器或 AI Agent 平台（OpenClaw 等）中没有浏览器：
-
-**新镜像：**
-
-```dockerfile
-FROM oven/bun:latest
-RUN bun add -g snowball-cli
-```
-
-**已运行的容器**（如 OpenClaw，持久化目录 `/home/node/.openclaw`）：
+### Docker 容器
 
 ```bash
-# 在 OpenClaw 持久化目录中安装 bun + snowball-cli
+# 进容器装 bun + snowball-cli
+docker exec <容器> bash -c "
+  curl -fsSL https://bun.sh/install | bash
+  ~/.bun/bin/bun add -g snowball-cli
+"
+
+# 从宿主机导入 token
+docker exec <容器> ~/.bun/bin/snowball import $(snowball export)
+```
+
+如果需要持久化，把 bun 装到挂载目录（见下方 OpenClaw 章节）。
+
+### VPS 上的 Docker（如 VPS 上跑 OpenClaw）
+
+```bash
+# 先确保本地已登录
+snowball status
+
+# SSH 到 VPS，在 Docker 容器内安装并导入
+ssh vps "docker exec <容器> bash -c '
+  export BUN_INSTALL=/home/node/.openclaw/.bun
+  curl -fsSL https://bun.sh/install | bash
+  /home/node/.openclaw/.bun/bin/bun add -g snowball-cli
+'"
+
+# 本地 → VPS → Docker 容器，一行导入 token
+ssh vps "docker exec <容器> /home/node/.openclaw/.bun/bin/snowball import $(snowball export)"
+```
+
+## OpenClaw 集成
+
+### 本机运行的 OpenClaw
+
+直接从 ClawHub 安装：
+
+```bash
+clawhub install baixianger/snowball-cli
+```
+
+导入 token（OpenClaw agent 调用 snowball 命令时需要）：
+
+```bash
+snowball export | xargs -I {} snowball import {}
+# 或者直接用同一台机器的 token，无需导入
+```
+
+### Docker 中的 OpenClaw
+
+OpenClaw 的持久化目录是 `/home/node/.openclaw`，安装到这里容器重启不丢。
+
+**Step 1：在容器中安装 bun + snowball-cli**
+
+```bash
 docker exec <容器> bash -c "
   export BUN_INSTALL=/home/node/.openclaw/.bun
   curl -fsSL https://bun.sh/install | bash
   /home/node/.openclaw/.bun/bin/bun add -g snowball-cli
 "
+```
 
-# 从宿主机导入 token
+**Step 2：从宿主机导入 token**
+
+```bash
 docker exec <容器> /home/node/.openclaw/.bun/bin/snowball import $(snowball export)
 ```
 
-全部装在 `/home/node/.openclaw/` 下，容器重启不丢。
-
-**作为 AgentSkill 安装**（在容器内或宿主机挂载的 workspace 目录中）：
+**Step 3：安装 AgentSkill**
 
 ```bash
-cd /home/node/.openclaw/workspace    # 或宿主机上的挂载路径
-bunx skills add https://github.com/baixianger/snowball-cli
+# 在容器内
+docker exec <容器> bash -c "
+  cd /home/node/.openclaw/workspace
+  /home/node/.openclaw/.bun/bin/bunx skills add https://github.com/baixianger/snowball-cli
+"
+```
+
+### 自建 Docker 镜像
+
+```dockerfile
+FROM oven/bun:latest
+RUN bun add -g snowball-cli
 ```
 
 ## 协议
