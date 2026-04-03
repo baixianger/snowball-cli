@@ -27,9 +27,10 @@ snowball fund 110011 --growth        # 基金收益
 
 ## 安装
 
+如果 `snowball` 命令不存在，提示用户运行：
+
 ```bash
-npm install -g snowball-cli          # 或
-bun add -g snowball-cli
+npm install -g snowball-cli
 ```
 
 ## 登录（仅在需要时）
