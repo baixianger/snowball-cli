@@ -88,13 +88,12 @@ async function ensureChrome(cdpUrl: string): Promise<void> {
     if (userPath) {
       bin = userPath;
     } else {
-      const chromeSub = join("Google", "Chrome", "Application", "chrome.exe");
       const defaults: Record<string, string[]> = {
         darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
         win32: [
-          ...(process.env.PROGRAMFILES ? [join(process.env.PROGRAMFILES, chromeSub)] : []),
-          ...(process.env["PROGRAMFILES(X86)"] ? [join(process.env["PROGRAMFILES(X86)"], chromeSub)] : []),
-          ...(process.env.LOCALAPPDATA ? [join(process.env.LOCALAPPDATA, chromeSub)] : []),
+          join(process.env.PROGRAMFILES ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
+          join(process.env["PROGRAMFILES(X86)"] ?? "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
+          join(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "Application", "chrome.exe"),
         ],
         linux: ["google-chrome", "google-chrome-stable", "chromium-browser"],
       };
