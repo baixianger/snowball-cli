@@ -59,16 +59,43 @@ snowball kol SH600519
 
 ### 登录认证
 
+**登录** — 需要 Chrome 或 Chromium（自动检测）：
+
 | 命令 | 说明 |
 |---|---|
-| `snowball login` | 二维码登录（终端内显示） |
-| `snowball login --manual` | 二维码登录（Chrome 窗口扫码） |
+| `snowball login` | 终端内显示二维码，用雪球 App 扫码 |
+| `snowball login --manual` | 打开 Chrome 窗口扫码 |
 | `snowball login --chrome <路径>` | 指定 Chrome/Chromium 路径 |
-| `snowball token <cookie>` | 手动设置 token |
-| `snowball status` | 查看登录状态并验证 token |
+
+设置 `CHROME_PATH` 环境变量可以省去每次 `--chrome`。
+
+**Token 传输** — 用于 VPS / 无头服务器 / Docker：
+
+| 命令 | 说明 |
+|---|---|
+| `snowball export` | 导出 token 为 base64（在本地机器运行） |
+| `snowball import <base64>` | 导入 token（在 VPS/Docker 运行） |
+
+一行搞定：`ssh vps "snowball import $(snowball export)"`
+
+**手动设置** — 只有浏览器 DevTools 时的兜底方案：
+
+| 命令 | 说明 |
+|---|---|
+| `snowball token <cookie>` | 粘贴 DevTools 中的 cookie 字符串 |
+
+复制路径：Chrome DevTools → Application → Cookies → xueqiu.com，然后：
+
+```bash
+snowball token "xq_a_token=abc123def456; u=781234567890"
+```
+
+**状态与清理：**
+
+| 命令 | 说明 |
+|---|---|
+| `snowball status` | 查看登录状态，自动验证 token 有效性 |
 | `snowball logout` | 删除已保存的 token |
-| `snowball export` | 导出 token（base64，用于传输） |
-| `snowball import <base64>` | 从其他机器导入 token |
 
 ### 行情
 
@@ -223,6 +250,33 @@ snowball login    # 自动检测无头模式，二维码在 SSH 终端显示
 
 # 指定路径
 snowball login --chrome /snap/bin/chromium
+```
+
+## Docker / OpenClaw 集成
+
+在 Docker 容器或 AI Agent 平台（OpenClaw 等）中没有浏览器：
+
+```dockerfile
+# Dockerfile 中
+RUN curl -fsSL https://bun.sh/install | bash
+RUN ~/.bun/bin/bun add -g snowball-cli
+```
+
+运行时注入 token：
+
+```bash
+# 从宿主机注入
+docker exec <容器> snowball import $(snowball export)
+
+# 或通过 docker-compose.yml 环境变量
+environment:
+  - SNOWBALL_TOKEN=<snowball export 输出的 base64>
+```
+
+作为 OpenClaw AgentSkill 安装：
+
+```bash
+bunx skills add https://github.com/baixianger/snowball-cli
 ```
 
 ## 协议

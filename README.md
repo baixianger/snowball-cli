@@ -59,16 +59,43 @@ snowball kol SH600519
 
 ### Auth
 
+**Login** — requires Chrome or Chromium (auto-detected):
+
 | Command | Description |
 |---|---|
-| `snowball login` | QR code login (shown in terminal) |
-| `snowball login --manual` | QR code login (scan in Chrome window) |
-| `snowball login --chrome <path>` | Specify custom Chrome/Chromium path |
-| `snowball token <cookie>` | Set token manually |
-| `snowball status` | Check login status + verify token |
+| `snowball login` | QR code in terminal — scan with Xueqiu app |
+| `snowball login --manual` | Opens Chrome window for you to scan there |
+| `snowball login --chrome <path>` | Use a custom Chrome/Chromium binary |
+
+Set `CHROME_PATH` env var to avoid `--chrome` every time.
+
+**Token transfer** — for VPS / headless servers without a browser:
+
+| Command | Description |
+|---|---|
+| `snowball export` | Print token as base64 (run on local machine) |
+| `snowball import <base64>` | Import token (run on VPS) |
+
+One-liner: `ssh vps "snowball import $(snowball export)"`
+
+**Manual fallback** — if you only have browser DevTools:
+
+| Command | Description |
+|---|---|
+| `snowball token <cookie>` | Paste cookie string from DevTools |
+
+Copy from: Chrome DevTools → Application → Cookies → xueqiu.com, then:
+
+```bash
+snowball token "xq_a_token=abc123def456; u=781234567890"
+```
+
+**Status & cleanup:**
+
+| Command | Description |
+|---|---|
+| `snowball status` | Check login status + verify token is active |
 | `snowball logout` | Remove saved token |
-| `snowball export` | Print token as base64 (for transfer) |
-| `snowball import <base64>` | Import token from another machine |
 
 ### Market
 
@@ -223,6 +250,33 @@ snowball login    # auto-detects headless, QR shows in SSH terminal
 
 # Custom path
 snowball login --chrome /snap/bin/chromium
+```
+
+## Docker / OpenClaw integration
+
+In Docker containers or AI agent platforms (OpenClaw, etc.) where there's no browser:
+
+```dockerfile
+# In Dockerfile
+RUN curl -fsSL https://bun.sh/install | bash
+RUN ~/.bun/bin/bun add -g snowball-cli
+```
+
+Then inject your token at runtime:
+
+```bash
+# From host machine
+docker exec <container> snowball import $(snowball export)
+
+# Or via environment variable in docker-compose.yml
+environment:
+  - SNOWBALL_TOKEN=<base64 from snowball export>
+```
+
+For OpenClaw AgentSkill config, install the skill:
+
+```bash
+bunx skills add https://github.com/baixianger/snowball-cli
 ```
 
 ## License
