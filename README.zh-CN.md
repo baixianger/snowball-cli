@@ -257,9 +257,13 @@ snowball login --chrome /snap/bin/chromium
 在 Docker 容器或 AI Agent 平台（OpenClaw 等）中没有浏览器：
 
 ```dockerfile
-# Dockerfile 中
-RUN curl -fsSL https://bun.sh/install | bash
-RUN ~/.bun/bin/bun add -g snowball-cli
+# 方式 1：使用官方 Bun 镜像
+FROM oven/bun:latest
+RUN bun add -g snowball-cli
+
+# 方式 2：在已有镜像中安装
+RUN curl -fsSL https://bun.sh/install | bash && \
+    ~/.bun/bin/bun add -g snowball-cli
 ```
 
 运行时注入 token：

@@ -257,9 +257,13 @@ snowball login --chrome /snap/bin/chromium
 In Docker containers or AI agent platforms (OpenClaw, etc.) where there's no browser:
 
 ```dockerfile
-# In Dockerfile
-RUN curl -fsSL https://bun.sh/install | bash
-RUN ~/.bun/bin/bun add -g snowball-cli
+# Option 1: Use official Bun image
+FROM oven/bun:latest
+RUN bun add -g snowball-cli
+
+# Option 2: Add to existing image
+RUN curl -fsSL https://bun.sh/install | bash && \
+    ~/.bun/bin/bun add -g snowball-cli
 ```
 
 Then inject your token at runtime:
