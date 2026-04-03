@@ -1,6 +1,8 @@
 ---
 name: snowball-cli
 description: 雪球股票数据命令行工具。当用户需要查询中国 A 股、港股、美股行情，查看上市公司财报、资金流向、股东信息，浏览雪球大 V 观点、热帖、实时快讯，或者做基金净值查询时，使用此技能。触发词包括：雪球、A股、港股、沪深、茅台、宁德时代、SH600519、SZ300750、基金净值、KOL、热帖、大 V、选股、K线、盘口、利润表、资产负债表、资金流向、大宗交易、融资融券。即使用户只是说「茅台现在多少钱」「今天市场怎么样」「张坤最近说了什么」也应该使用此技能。
+compatibility: Requires Bun runtime and network access to xueqiu.com / stock.xueqiu.com / danjuanapp.com APIs. Login command uses Chrome/Chromium via CDP for QR code authentication (user-initiated only).
+license: MIT
 ---
 
 # Snowball CLI — 雪球数据命令行工具
