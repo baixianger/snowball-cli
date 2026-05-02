@@ -21,27 +21,36 @@ const HEADERS = {
   "X-Requested-With": "XMLHttpRequest",
 };
 
-async function request(path: string, params: Record<string, string | number> = {}, base = STOCK_URL): Promise<any> {
+async function request(path: string, params: Record<string, string | number> = {}, base = STOCK_URL, retries = 2): Promise<any> {
   const cookie = getCookie();
   const url = new URL(path, base);
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, String(v));
   }
 
-  const res = await fetch(url.toString(), {
-    headers: { ...HEADERS, Cookie: cookie },
-  });
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(url.toString(), {
+      headers: { ...HEADERS, Cookie: cookie },
+    });
 
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    if (!res.ok) {
+      // Retry on 429 (rate limit) and 5xx (server error)
+      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    }
+
+    const data = await res.json();
+    if (data.error_code && data.error_code !== 0) {
+      throw new Error(`API error ${data.error_code}: ${data.error_description}`);
+    }
+
+    return data;
   }
 
-  const data = await res.json();
-  if (data.error_code) {
-    throw new Error(`API error ${data.error_code}: ${data.error_description}`);
-  }
-
-  return data;
+  throw new Error("Request failed after retries");
 }
 
 /** Request without token (for public endpoints like quotec) */
@@ -486,5 +495,53 @@ export async function fundNav(code: string, page = 1, size = 30): Promise<any> {
 /** Fund growth performance */
 export async function fundGrowth(code: string, period = "ty"): Promise<any> {
   const data = await requestPublic(`/djapi/fund/growth/${code}`, { day: period }, DANJUAN_URL);
+  return data.data;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PORTFOLIO (组合)
+// ═══════════════════════════════════════════════════════════════
+
+/** List user's portfolios (组合列表) */
+export async function portfolios(): Promise<any> {
+  const data = await request("/v5/stock/portfolio/list.json", { system: "true" });
+  return data.data?.items ?? data.data;
+}
+
+/** Portfolio detail with current holdings (组合详情 + 持仓) */
+export async function portfolioDetail(portfolioId: string): Promise<any> {
+  const data = await request("/v5/stock/portfolio/stock_list.json", {
+    portfolio_id: portfolioId,
+    size: 100,
+  });
+  return data.data;
+}
+
+/** Portfolio performance / net value history (组合净值走势) */
+export async function portfolioPerformance(
+  portfolioId: string,
+  period: "1m" | "3m" | "6m" | "1y" | "all" = "all",
+): Promise<any> {
+  const periodMap: Record<string, string> = {
+    "1m": "1month", "3m": "3month", "6m": "6month", "1y": "1year", "all": "all",
+  };
+  const data = await request("/v5/stock/portfolio/performance.json", {
+    portfolio_id: portfolioId,
+    period: periodMap[period] ?? period,
+  });
+  return data.data;
+}
+
+/** Portfolio rebalancing history (组合调仓历史) */
+export async function portfolioRebalance(
+  portfolioId: string,
+  page = 1,
+  size = 20,
+): Promise<any> {
+  const data = await request("/v5/stock/portfolio/rebalance/history.json", {
+    portfolio_id: portfolioId,
+    page,
+    size,
+  });
   return data.data;
 }

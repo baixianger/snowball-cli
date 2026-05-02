@@ -506,6 +506,29 @@ const commands: Record<string, Record<string, Command>> = {
       },
     },
   },
+
+  // ── Portfolio ────────────────────────────────────────────────
+  "Portfolio": {
+    "portfolio-list": {
+      usage: "portfolio-list",
+      desc: "List your portfolios (组合列表)",
+      run: async () => out(await api.portfolios()),
+    },
+    portfolio: {
+      usage: "portfolio <id> [--detail] [--performance] [--rebalance]",
+      desc: "Portfolio holdings / performance / rebalance history",
+      run: async () => {
+        const id = requireArg(1, "Usage: snowball portfolio <id> [--detail] [--performance] [--rebalance]");
+        if (hasFlag("performance")) {
+          out(await api.portfolioPerformance(id, (flag("period") ?? "all") as any));
+        } else if (hasFlag("rebalance")) {
+          out(await api.portfolioRebalance(id));
+        } else {
+          out(await api.portfolioDetail(id));
+        }
+      },
+    },
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════
