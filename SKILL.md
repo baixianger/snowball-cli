@@ -124,6 +124,16 @@ snowball screen SH                       # 选股器
 snowball fund 110011 --nav               # 基金净值（无需登录）
 ```
 
+### 组合（Portfolio）
+
+```bash
+snowball portfolio-list                  # 列出你的组合
+snowball portfolio <组合ID>              # 组合持仓
+snowball portfolio <组合ID> --performance  # 组合净值走势
+snowball portfolio <组合ID> --performance --period 1y  # 指定时间段
+snowball portfolio <组合ID> --rebalance  # 调仓历史
+```
+
 ## Agent 工作流
 
 ### 早盘简报

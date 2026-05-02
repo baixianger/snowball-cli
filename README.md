@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Xueqiu stock data for AI agents</strong><br/>
-  <sub>30 commands | A-shares, HK, US stocks & funds | JSON output</sub>
+  <sub>32 commands | A-shares, HK, US stocks, funds & portfolios | JSON output</sub>
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
   <a href="https://www.npmjs.com/package/snowball-cli"><img src="https://img.shields.io/npm/v/snowball-cli?color=cb3837&logo=npm&logoColor=white" alt="npm" /></a>
   <a href="https://github.com/baixianger/snowball-cli/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license" /></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-f472b6?logo=bun&logoColor=white" alt="Bun" /></a>
-  <img src="https://img.shields.io/badge/commands-30-orange" alt="commands" />
+  <img src="https://img.shields.io/badge/commands-32-orange" alt="commands" />
   <img src="https://img.shields.io/badge/data-Xueqiu%20%E9%9B%AA%E7%90%83-1DA1F2" alt="data source" />
 </p>
 
@@ -122,6 +122,15 @@ Set `CHROME_PATH` or use `--chrome <path>` for custom Chrome/Chromium location.
 | `snowball search-user <keyword>` | Search users | * |
 | `snowball screen [SH\|HK\|US]` | Stock screener | * |
 | `snowball fund <code> [--nav\|--growth]` | Fund detail / NAV / growth | |
+
+### Portfolio (组合)
+
+| Command | Description |
+|---|---|
+| `snowball portfolio-list` | List your portfolios |
+| `snowball portfolio <id>` | Portfolio holdings (default) |
+| `snowball portfolio <id> --performance [--period 1m\|3m\|6m\|1y\|all]` | Net value history |
+| `snowball portfolio <id> --rebalance` | Rebalancing history |
 
 ## Symbol format
 
