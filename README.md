@@ -1,3 +1,5 @@
+
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/baixianger/snowball-cli/main/logo.png" width="160" alt="Snowball CLI" />
 </p>
@@ -105,14 +107,14 @@ Set `CHROME_PATH` or use `--chrome <path>` for custom Chrome/Chromium location.
 
 ### Social & News
 
-| Command | Description |
-|---|---|
-| `snowball trending [day\|week\|month]` | Hot posts / KOL articles |
-| `snowball live [--important]` | 7x24 live news |
-| `snowball feed [category]` | Feed (headlines, today, a-shares, us, hk, funds) |
-| `snowball hot [cn\|us\|hk\|global]` | Hot stocks |
-| `snowball kol <sym>` | KOLs for a stock |
-| `snowball user <id>` / `profile <id>` / `post <id>` | User posts / profile / single post |
+| Command | Description | Auth |
+|---|---|:---:|
+| `snowball trending [day\|week\|month]` | Hot posts / KOL articles | * |
+| `snowball live [--important]` | 7x24 live news | * |
+| `snowball feed [category]` | Feed (headlines, today, a-shares, us, hk, funds) | * |
+| `snowball hot [cn\|us\|hk\|global]` | Hot stocks | * |
+| `snowball kol <sym>` | KOLs for a stock | * |
+| `snowball user <id>` / `profile <id>` / `post <id>` | User posts / profile / single post | * |
 
 ### Discovery & Funds
 
