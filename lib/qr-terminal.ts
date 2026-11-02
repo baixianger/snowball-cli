@@ -21,6 +21,7 @@
 import { mkdirSync } from "fs";
 import { dirname, resolve } from "path";
 import QRCode from "qrcode";
+import { redactSensitiveText, redactUrl } from "./redact";
 
 /** Host the logged-in web app and the QR state API actually live on. */
 export const XUEQIU_ORIGIN = "https://www.xueqiu.com";
@@ -133,7 +134,7 @@ export function assertXueqiuRedirect(currentUrl: string, location: string): stri
   try {
     next = new URL(location, currentUrl);
   } catch {
-    throw new Error(`Refusing to follow invalid redirect: ${location}`);
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(location)}`);
   }
   if (next.protocol !== "https:" || !isXueqiuHostname(next.hostname)) {
     throw new Error(`Refusing to follow redirect to ${next.origin} with Xueqiu cookies`);
@@ -284,19 +285,19 @@ export async function generateQRCode(wafCookies: string): Promise<QRGenerateResu
   const { response, cookie } = await fetchXueqiu(qrGenerateUrl(), wafCookies, { method: "POST" });
 
   if (!response.ok) {
-    const detail = (await response.text()).slice(0, 180);
+    const detail = redactSensitiveText(await response.text()).slice(0, 180);
     throw new Error(`QR generate failed: HTTP ${response.status} ${detail}`);
   }
 
   const data = await response.json();
   if (!data.success || !data.data?.qr_code) {
-    throw new Error(`QR generate failed: ${data.message || JSON.stringify(data)}`);
+    throw new Error(`QR generate failed: ${redactSensitiveText(String(data.message || JSON.stringify(data)))}`);
   }
 
   const qrUrl = data.data.qr_code;
   const codeMatch = qrUrl.match(/code=([a-f0-9]+)/i);
   if (!codeMatch) {
-    throw new Error(`Could not parse QR code from URL: ${qrUrl}`);
+    throw new Error(`Could not parse QR code from URL: ${redactUrl(String(qrUrl))}`);
   }
 
   return { qrUrl, code: codeMatch[1], cookie };
@@ -387,7 +388,7 @@ export async function pollQRStatus(
     const res = result.response;
 
     if (!res.ok) {
-      const detail = (await res.text()).slice(0, 180);
+      const detail = redactSensitiveText(await res.text()).slice(0, 180);
       throw new Error(`Poll failed: HTTP ${res.status} ${detail}`);
     }
 
@@ -412,7 +413,7 @@ export async function pollQRStatus(
     if (decision.type === "expired") return "EXPIRED";
 
     if (decision.type === "invalid") {
-      throw new Error(`Unexpected QR status: ${JSON.stringify(data).slice(0, 180)}`);
+      throw new Error(`Unexpected QR status: ${redactSensitiveText(JSON.stringify(data)).slice(0, 180)}`);
     }
 
     if (decision.type === "scanned" && !announcedScan) {

@@ -8,15 +8,26 @@
  */
 
 import { getCookie } from "./auth";
+import { redactSensitiveText, redactUrl } from "./redact";
+import {
+  cookiePairsFromSetCookie,
+  isXueqiuHostname,
+  mergeCookies,
+  readSetCookie,
+} from "./qr-terminal";
 
 const STOCK_URL = "https://stock.xueqiu.com";
 /**
  * www, not the apex. GET https://xueqiu.com is a 301 to www, and fetch drops
- * the Cookie header on that redirect, so search and the other /query and
- * /statuses calls came back with no `data` and the CLI printed `undefined`.
+ * the Cookie header on that redirect, so the first hop is www directly.
+ * Same-site 302s (search-user: /users/search.json → /query/v1/old/search/user)
+ * are followed below with Cookie replayed. The Location query can contain
+ * access_token and the user id, so errors keep only origin and path.
  */
 export const XUEQIU_URL = "https://www.xueqiu.com";
 const DANJUAN_URL = "https://danjuanapp.com";
+/** search-user is one 302, sometimes plus an apex→www 301. Three is enough. */
+export const MAX_API_REDIRECTS = 3;
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -39,7 +50,9 @@ export function parseApiBody(text: string, path: string): any {
   }
   const record = data as Record<string, unknown>;
   if (record.error_code) {
-    const description = record.error_description ? `: ${record.error_description}` : "";
+    const description = record.error_description
+      ? `: ${redactSensitiveText(String(record.error_description))}`
+      : "";
     throw new Error(`API error ${record.error_code}${description}`);
   }
   return data;
@@ -58,17 +71,114 @@ export function requireData(body: any, path: string, field?: string): any {
 }
 
 async function readResponse(res: Response, path: string): Promise<any> {
-  if (res.status >= 300 && res.status < 400) {
-    const location = res.headers.get("location");
-    throw new Error(
-      `Xueqiu redirected ${path} (${res.status}${location ? ` to ${location}` : ""}). Refusing to follow because fetch drops Cookie on redirect.`,
-    );
-  }
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${text.replace(/\s+/g, " ").slice(0, 180)}`);
+    const cleaned = redactSensitiveText(text.replace(/\s+/g, " ")).slice(0, 180);
+    throw new Error(`HTTP ${res.status} for ${path}: ${cleaned}`);
   }
   return parseApiBody(text, path);
+}
+
+/**
+ * Next hop for an API call. The returned URL keeps its query — search-user
+ * authenticates with access_token there — but callers must not log it.
+ *
+ * With a cookie, only https xueqiu.com / *.xueqiu.com is followed (a non-xueqiu
+ * start may stay on that same host). A cookieless xueqiu call stays on xueqiu.
+ * A cookieless call on any other host may follow https elsewhere, so
+ * danjuanapp.com can 301 to danjuanfunds.com.
+ */
+export function resolveApiRedirect(currentUrl: string, location: string, hasCookie = false): string {
+  let next: URL;
+  try {
+    next = new URL(location, currentUrl);
+  } catch {
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(location)}`);
+  }
+  let from: URL;
+  try {
+    from = new URL(currentUrl);
+  } catch {
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(currentUrl)}`);
+  }
+  const fromHost = from.hostname.toLowerCase().replace(/\.$/, "");
+  const nextHost = next.hostname.toLowerCase().replace(/\.$/, "");
+  const fromXueqiu = isXueqiuHostname(fromHost);
+  const nextXueqiu = isXueqiuHostname(nextHost);
+  const sameHost = fromHost === nextHost;
+  const cookieSafe = (fromXueqiu && nextXueqiu) || (!fromXueqiu && sameHost);
+  const allowed = next.protocol === "https:" && (hasCookie ? cookieSafe : (fromXueqiu ? nextXueqiu : true));
+  if (!allowed) {
+    throw new Error(`Refusing to follow redirect to ${next.origin}`);
+  }
+  return next.toString();
+}
+
+async function drain(res: Response): Promise<void> {
+  await res.arrayBuffer().catch(() => {});
+}
+
+/**
+ * `fetch` drops a manually set Cookie on redirect. Replay each hop ourselves:
+ * Cookie only on https xueqiu hosts, at most {@link MAX_API_REDIRECTS} hops.
+ */
+type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+export async function fetchApi(
+  url: string,
+  cookie: string | undefined,
+  headers: HeadersInit,
+  doFetch: ApiFetch = fetch,
+): Promise<Response> {
+  let current = url;
+  let jar = cookie ?? "";
+  for (let followed = 0; ; followed++) {
+    let host: string;
+    try {
+      host = new URL(current).hostname;
+    } catch {
+      throw new Error(`Refusing to request invalid URL: ${redactUrl(current)}`);
+    }
+    const reqHeaders = new Headers(headers);
+    if (jar && isXueqiuHostname(host)) reqHeaders.set("Cookie", jar);
+    else reqHeaders.delete("Cookie");
+
+    const response = await doFetch(current, { headers: reqHeaders, redirect: "manual" });
+    if (isXueqiuHostname(host)) {
+      const extra = cookiePairsFromSetCookie(readSetCookie(response));
+      if (extra) jar = jar ? mergeCookies(jar, extra) : extra;
+    }
+
+    if (response.status < 300 || response.status >= 400) return response;
+
+    const location = response.headers.get("location")?.trim();
+    if (!location || followed >= MAX_API_REDIRECTS) {
+      await drain(response);
+      let target = "";
+      if (location) {
+        try {
+          target = redactUrl(new URL(location, current).toString());
+        } catch {
+          target = redactUrl(location);
+        }
+      }
+      const where = target ? ` to ${target}` : "";
+      throw new Error(
+        `Xueqiu redirected ${redactUrl(current)} (${response.status}${where}). Stopped after ${MAX_API_REDIRECTS} hops.`,
+      );
+    }
+
+    let next: string;
+    try {
+      next = resolveApiRedirect(current, location, Boolean(jar));
+    } catch (err) {
+      await drain(response);
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(redactSensitiveText(message));
+    }
+    await drain(response);
+    current = next;
+  }
 }
 
 function withParams(path: string, params: Record<string, string | number>, base: string): string {
@@ -81,10 +191,7 @@ function withParams(path: string, params: Record<string, string | number>, base:
 
 async function request(path: string, params: Record<string, string | number> = {}, base = STOCK_URL): Promise<any> {
   const cookie = getCookie();
-  const res = await fetch(withParams(path, params, base), {
-    headers: { ...HEADERS, Cookie: cookie },
-    redirect: "manual",
-  });
+  const res = await fetchApi(withParams(path, params, base), cookie, HEADERS);
   return readResponse(res, path);
 }
 
@@ -99,10 +206,7 @@ async function requestData(
 
 /** Request without token (for public endpoints like quotec) */
 async function requestPublic(path: string, params: Record<string, string | number> = {}, base = STOCK_URL): Promise<any> {
-  const res = await fetch(withParams(path, params, base), {
-    headers: { ...HEADERS },
-    redirect: "manual",
-  });
+  const res = await fetchApi(withParams(path, params, base), undefined, HEADERS);
   return readResponse(res, path);
 }
 

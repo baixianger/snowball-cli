@@ -7179,6 +7179,33 @@ var $toFile = function toFile(path, text, opts, cb) {
   return render(renderToFile, text, params);
 };
 
+// lib/redact.ts
+var SENSITIVE_PARAM = /\b(?:access_token|session_token|uuid)=[^&#\s"'<>]*/gi;
+var USER_PARAM = /([?&])u=[^&#\s"'<>]*/g;
+var URL_IN_TEXT = /https?:\/\/[^\s"'<>]*/g;
+function redactUrl(raw) {
+  const input = raw.trim();
+  if (!input)
+    return input;
+  try {
+    const url = new URL(input);
+    const hidden = url.search !== "" || url.hash !== "";
+    url.search = "";
+    url.hash = "";
+    const shown = url.toString();
+    return hidden ? `${shown}?\u2026` : shown;
+  } catch {
+    return input.replace(/[?#].*/, "?\u2026");
+  }
+}
+function redactSensitiveText(text) {
+  const withoutUrls = text.replace(URL_IN_TEXT, (match) => {
+    const trimmed = match.replace(/[),.;]+$/, "");
+    return redactUrl(trimmed) + match.slice(trimmed.length);
+  });
+  return withoutUrls.replace(SENSITIVE_PARAM, (match) => `${match.slice(0, match.indexOf("="))}=\u2026`).replace(USER_PARAM, "$1u=\u2026");
+}
+
 // lib/qr-terminal.ts
 var XUEQIU_ORIGIN = "https://www.xueqiu.com";
 var HEADERS = {
@@ -7256,7 +7283,7 @@ function assertXueqiuRedirect(currentUrl, location) {
   try {
     next = new URL(location, currentUrl);
   } catch {
-    throw new Error(`Refusing to follow invalid redirect: ${location}`);
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(location)}`);
   }
   if (next.protocol !== "https:" || !isXueqiuHostname(next.hostname)) {
     throw new Error(`Refusing to follow redirect to ${next.origin} with Xueqiu cookies`);
@@ -7357,17 +7384,17 @@ async function getWafCookies(cdpUrl) {
 async function generateQRCode(wafCookies) {
   const { response, cookie } = await fetchXueqiu(qrGenerateUrl(), wafCookies, { method: "POST" });
   if (!response.ok) {
-    const detail = (await response.text()).slice(0, 180);
+    const detail = redactSensitiveText(await response.text()).slice(0, 180);
     throw new Error(`QR generate failed: HTTP ${response.status} ${detail}`);
   }
   const data = await response.json();
   if (!data.success || !data.data?.qr_code) {
-    throw new Error(`QR generate failed: ${data.message || JSON.stringify(data)}`);
+    throw new Error(`QR generate failed: ${redactSensitiveText(String(data.message || JSON.stringify(data)))}`);
   }
   const qrUrl = data.data.qr_code;
   const codeMatch = qrUrl.match(/code=([a-f0-9]+)/i);
   if (!codeMatch) {
-    throw new Error(`Could not parse QR code from URL: ${qrUrl}`);
+    throw new Error(`Could not parse QR code from URL: ${redactUrl(String(qrUrl))}`);
   }
   return { qrUrl, code: codeMatch[1], cookie };
 }
@@ -7424,7 +7451,7 @@ async function pollQRStatus(code, wafCookies, cdpUrl, timeoutMs = QR_REFRESH_MS)
     cookie = result.cookie;
     const res = result.response;
     if (!res.ok) {
-      const detail = (await res.text()).slice(0, 180);
+      const detail = redactSensitiveText(await res.text()).slice(0, 180);
       throw new Error(`Poll failed: HTTP ${res.status} ${detail}`);
     }
     const data = await res.json();
@@ -7441,7 +7468,7 @@ async function pollQRStatus(code, wafCookies, cdpUrl, timeoutMs = QR_REFRESH_MS)
     if (decision.type === "expired")
       return "EXPIRED";
     if (decision.type === "invalid") {
-      throw new Error(`Unexpected QR status: ${JSON.stringify(data).slice(0, 180)}`);
+      throw new Error(`Unexpected QR status: ${redactSensitiveText(JSON.stringify(data)).slice(0, 180)}`);
     }
     if (decision.type === "scanned" && !announcedScan) {
       announcedScan = true;
@@ -9070,6 +9097,7 @@ init_auth();
 var STOCK_URL = "https://stock.xueqiu.com";
 var XUEQIU_URL = "https://www.xueqiu.com";
 var DANJUAN_URL = "https://danjuanapp.com";
+var MAX_API_REDIRECTS = 3;
 var HEADERS2 = {
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   Accept: "application/json",
@@ -9089,7 +9117,7 @@ function parseApiBody(text, path) {
   }
   const record = data;
   if (record.error_code) {
-    const description = record.error_description ? `: ${record.error_description}` : "";
+    const description = record.error_description ? `: ${redactSensitiveText(String(record.error_description))}` : "";
     throw new Error(`API error ${record.error_code}${description}`);
   }
   return data;
@@ -9106,15 +9134,89 @@ function requireData(body, path, field) {
   return body.data[field];
 }
 async function readResponse(res, path) {
-  if (res.status >= 300 && res.status < 400) {
-    const location = res.headers.get("location");
-    throw new Error(`Xueqiu redirected ${path} (${res.status}${location ? ` to ${location}` : ""}). Refusing to follow because fetch drops Cookie on redirect.`);
-  }
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${text.replace(/\s+/g, " ").slice(0, 180)}`);
+    const cleaned = redactSensitiveText(text.replace(/\s+/g, " ")).slice(0, 180);
+    throw new Error(`HTTP ${res.status} for ${path}: ${cleaned}`);
   }
   return parseApiBody(text, path);
+}
+function resolveApiRedirect(currentUrl, location, hasCookie = false) {
+  let next;
+  try {
+    next = new URL(location, currentUrl);
+  } catch {
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(location)}`);
+  }
+  let from;
+  try {
+    from = new URL(currentUrl);
+  } catch {
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(currentUrl)}`);
+  }
+  const fromHost = from.hostname.toLowerCase().replace(/\.$/, "");
+  const nextHost = next.hostname.toLowerCase().replace(/\.$/, "");
+  const fromXueqiu = isXueqiuHostname(fromHost);
+  const nextXueqiu = isXueqiuHostname(nextHost);
+  const sameHost = fromHost === nextHost;
+  const cookieSafe = fromXueqiu && nextXueqiu || !fromXueqiu && sameHost;
+  const allowed = next.protocol === "https:" && (hasCookie ? cookieSafe : fromXueqiu ? nextXueqiu : true);
+  if (!allowed) {
+    throw new Error(`Refusing to follow redirect to ${next.origin}`);
+  }
+  return next.toString();
+}
+async function drain(res) {
+  await res.arrayBuffer().catch(() => {});
+}
+async function fetchApi(url, cookie, headers, doFetch = fetch) {
+  let current = url;
+  let jar = cookie ?? "";
+  for (let followed = 0;; followed++) {
+    let host;
+    try {
+      host = new URL(current).hostname;
+    } catch {
+      throw new Error(`Refusing to request invalid URL: ${redactUrl(current)}`);
+    }
+    const reqHeaders = new Headers(headers);
+    if (jar && isXueqiuHostname(host))
+      reqHeaders.set("Cookie", jar);
+    else
+      reqHeaders.delete("Cookie");
+    const response = await doFetch(current, { headers: reqHeaders, redirect: "manual" });
+    if (isXueqiuHostname(host)) {
+      const extra = cookiePairsFromSetCookie(readSetCookie(response));
+      if (extra)
+        jar = jar ? mergeCookies(jar, extra) : extra;
+    }
+    if (response.status < 300 || response.status >= 400)
+      return response;
+    const location = response.headers.get("location")?.trim();
+    if (!location || followed >= MAX_API_REDIRECTS) {
+      await drain(response);
+      let target = "";
+      if (location) {
+        try {
+          target = redactUrl(new URL(location, current).toString());
+        } catch {
+          target = redactUrl(location);
+        }
+      }
+      const where = target ? ` to ${target}` : "";
+      throw new Error(`Xueqiu redirected ${redactUrl(current)} (${response.status}${where}). Stopped after ${MAX_API_REDIRECTS} hops.`);
+    }
+    let next;
+    try {
+      next = resolveApiRedirect(current, location, Boolean(jar));
+    } catch (err) {
+      await drain(response);
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(redactSensitiveText(message));
+    }
+    await drain(response);
+    current = next;
+  }
 }
 function withParams(path, params, base) {
   const url = new URL(path, base);
@@ -9125,20 +9227,14 @@ function withParams(path, params, base) {
 }
 async function request(path, params = {}, base = STOCK_URL) {
   const cookie = getCookie();
-  const res = await fetch(withParams(path, params, base), {
-    headers: { ...HEADERS2, Cookie: cookie },
-    redirect: "manual"
-  });
+  const res = await fetchApi(withParams(path, params, base), cookie, HEADERS2);
   return readResponse(res, path);
 }
 async function requestData(path, params = {}, base = STOCK_URL, field) {
   return requireData(await request(path, params, base), path, field);
 }
 async function requestPublic(path, params = {}, base = STOCK_URL) {
-  const res = await fetch(withParams(path, params, base), {
-    headers: { ...HEADERS2 },
-    redirect: "manual"
-  });
+  const res = await fetchApi(withParams(path, params, base), undefined, HEADERS2);
   return readResponse(res, path);
 }
 async function requestPublicData(path, params = {}, base = STOCK_URL, field) {
@@ -9611,7 +9707,7 @@ var commands = {
           timeoutMs = parseLoginTimeoutMs(timeoutRaw);
         } catch (e) {
           console.error(`
-  ${e.message}
+  ${redactSensitiveText(String(e.message))}
 `);
           process.exit(1);
         }
@@ -9670,10 +9766,10 @@ var commands = {
                 saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
               } catch (e) {
                 if (qrPng || !process.stdin.isTTY) {
-                  throw new Error(`QR failed: ${e.message}`);
+                  throw new Error(`QR failed: ${redactSensitiveText(String(e.message))}`);
                 }
                 console.error(`
-  QR failed: ${e.message}
+  QR failed: ${redactSensitiveText(String(e.message))}
   Falling back to manual...
 `);
                 const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
@@ -9995,7 +10091,7 @@ for (const group of Object.values(commands)) {
       await group[MODE].run();
     } catch (e) {
       console.error(`
-  Error: ${e.message}
+  Error: ${redactSensitiveText(String(e.message))}
 `);
       process.exit(1);
     }
