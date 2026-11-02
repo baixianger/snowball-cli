@@ -7,25 +7,33 @@
  *   2. Manual: user pastes token from browser devtools
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+import { existsSync, writeFileSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { secureDirectory, secureFile } from "./private";
 
 const DATA_DIR = join(homedir(), ".snowball-cli");
 const TOKEN_PATH = join(DATA_DIR, "token.json");
 const XUEQIU_HOST = "xueqiu.com";
 
-mkdirSync(DATA_DIR, { recursive: true });
+function ensureDataDir(): void {
+  secureDirectory(DATA_DIR);
+  if (existsSync(TOKEN_PATH)) secureFile(TOKEN_PATH);
+}
+
+ensureDataDir();
 
 export interface TokenData {
   cookie: string;
   extractedAt: string;
-  source: "chrome" | "chrome-qr" | "manual";
+  source: "chrome" | "chrome-qr" | "chrome-sms" | "manual";
 }
 
-/** Save token to disk */
+/** Save token to disk (owner read/write only). */
 export function saveToken(data: TokenData): void {
-  writeFileSync(TOKEN_PATH, JSON.stringify(data, null, 2), "utf-8");
+  ensureDataDir();
+  writeFileSync(TOKEN_PATH, JSON.stringify(data, null, 2), { encoding: "utf-8", mode: 0o600 });
+  secureFile(TOKEN_PATH);
 }
 
 /** Load saved token */
@@ -49,9 +57,10 @@ export function getCookie(): string {
   const token = loadToken();
   if (!token) {
     console.error("\n  Not logged in. Run:\n");
-    console.error("    snowball login          # QR code in terminal");
-    console.error("    snowball login --manual  # scan in Chrome window");
-    console.error("    snowball token <cookie>  # manual paste\n");
+    console.error("    snowball login                 # QR code in the terminal");
+    console.error("    snowball login --qr-png <file> # PNG for a phone chat, then wait");
+    console.error("    snowball login --manual        # scan in the Chrome window");
+    console.error("    snowball token <cookie>        # manual paste\n");
     process.exit(1);
   }
   return token.cookie;

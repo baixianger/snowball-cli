@@ -4,24 +4,31 @@
  */
 
 import { readFileSync } from "fs";
-import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { platform } from "os";
 import {
-  extractFromChrome,
+  DATA_DIR,
   saveToken,
   loadToken,
-  getCookie,
   verifyToken,
 } from "./lib/auth";
-import { qrLogin } from "./lib/qr-terminal";
+import { qrLogin, hasLoginCookie, getWafCookies, parseLoginTimeoutMs } from "./lib/qr-terminal";
+import { armSmsProcessCleanup, ensureChrome, openXueqiuTab, stopSnowballChrome, stopStartedXvfb } from "./lib/browser";
+import {
+  completeSavedLogin,
+  normalizeAreaCode,
+  normalizePhone,
+  runCaptchaClick,
+  runPhoneLogin,
+  shouldPromptForSms,
+  type SmsCommandResult,
+} from "./lib/sms";
 import * as api from "./lib/api";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CDP_URL = process.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://127.0.0.1:9222";
 const MODE = process.argv[2];
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 
 // ═══════════════════════════════════════════════════════════════
 //  Helpers
@@ -71,109 +78,80 @@ function symbols(): string[] {
 //  Chrome / Login helpers
 // ═══════════════════════════════════════════════════════════════
 
-async function ensureChrome(cdpUrl: string): Promise<void> {
-  const { spawn } = await import("child_process");
-  const { mkdirSync } = await import("fs");
-  const profileDir = join(homedir(), ".snowball-cli", "chrome-profile");
-  mkdirSync(profileDir, { recursive: true });
-
-  let ready = false;
-  try { await fetch(`${cdpUrl}/json/version`); ready = true; } catch {}
-
-  if (!ready) {
-    console.log("  Starting Chrome...");
-
-    // Priority: --chrome flag > CHROME_PATH env > platform defaults
-    const userPath = flag("chrome") ?? process.env.CHROME_PATH;
-    let bin: string;
-
-    if (userPath) {
-      bin = userPath;
-    } else {
-      const defaults: Record<string, string[]> = {
-        darwin: [
-          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-          "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        ],
-        win32: [
-          join(process.env.PROGRAMFILES ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
-          join(process.env["PROGRAMFILES(X86)"] ?? "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
-          join(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "Application", "chrome.exe"),
-          join(process.env.PROGRAMFILES ?? "C:\\Program Files", "Chromium", "Application", "chrome.exe"),
-          join(process.env.LOCALAPPDATA ?? "", "Chromium", "Application", "chrome.exe"),
-        ],
-        linux: [
-          "google-chrome", "google-chrome-stable",
-          "chromium-browser", "chromium",
-          "/usr/bin/chromium-browser", "/usr/bin/chromium",
-          "/snap/bin/chromium",
-        ],
-      };
-      const candidates = defaults[platform()] ?? defaults.linux;
-      const { existsSync } = await import("fs");
-      const { execSync } = await import("child_process");
-      bin = "";
-      for (const c of candidates) {
-        // Absolute paths: check file exists. Bare names: check if on PATH.
-        if (c.includes("/") || c.includes("\\")) {
-          if (existsSync(c)) { bin = c; break; }
-        } else {
-          try {
-            const cmd = platform() === "win32" ? `where ${c}` : `which ${c}`;
-            execSync(cmd, { stdio: "ignore" });
-            bin = c; break;
-          } catch {}
-        }
-      }
-      if (!bin) {
-        console.error("\n  Chrome / Chromium not found.\n");
-        if (platform() === "linux") {
-          console.error("  Install Chromium:\n");
-          console.error("    apt install -y chromium-browser   # Debian/Ubuntu");
-          console.error("    yum install -y chromium           # CentOS/RHEL");
-          console.error("    snap install chromium              # Snap\n");
-        } else if (platform() === "win32") {
-          console.error("  Set CHROME_PATH:\n");
-          console.error('    set CHROME_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"\n');
-        } else {
-          console.error("  Install Chrome or Chromium, or set CHROME_PATH:\n");
-          console.error("    export CHROME_PATH=/path/to/chrome\n");
-        }
-        console.error("  Or use --chrome flag:  snowball login --chrome /path/to/chrome");
-        console.error("  Or skip browser:       snowball import $(snowball export)  # from another machine\n");
-        process.exit(1);
-      }
-    }
-
-    // Headless detection: no DISPLAY on Linux = headless server
-    const isHeadless = platform() === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
-    const chromeArgs = [
-      "--remote-debugging-port=9222",
-      `--user-data-dir=${profileDir}`,
-      ...(isHeadless ? ["--headless=new", "--no-sandbox", "--disable-gpu"] : []),
-    ];
-    if (isHeadless) console.log("  Headless mode detected (no DISPLAY)");
-
-    const child = spawn(bin, chromeArgs, { stdio: "ignore", detached: true });
-    child.unref();
-
-    for (let i = 0; i < 15; i++) {
-      await new Promise(r => setTimeout(r, 1000));
-      try { await fetch(`${cdpUrl}/json/version`); ready = true; break; } catch {}
-    }
-    if (!ready) { console.error("  Chrome failed to start.\n"); process.exit(1); }
+async function readConfirmedLogin(cdpUrl: string): Promise<string> {
+  const cookie = await getWafCookies(cdpUrl);
+  if (!hasLoginCookie(cookie)) {
+    throw new Error("missing xq_is_login");
   }
+  return cookie;
 }
 
-async function openXueqiuTab(cdpUrl: string): Promise<void> {
-  const { webSocketDebuggerUrl } = await (await fetch(`${cdpUrl}/json/version`)).json();
-  const ws = new WebSocket(webSocketDebuggerUrl);
-  await new Promise<void>((resolve, reject) => {
-    const t = setTimeout(() => { ws.close(); reject(new Error("timeout")); }, 10000);
-    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Target.createTarget", params: { url: "https://xueqiu.com" } }));
-    ws.onmessage = (e) => { const m = JSON.parse(typeof e.data === "string" ? e.data : ""); if (m.id === 1) { clearTimeout(t); ws.close(); resolve(); } };
-    ws.onerror = () => { clearTimeout(t); reject(new Error("CDP failed")); };
-  });
+/** Manual login. A TTY waits for ENTER; otherwise poll Chrome until the session cookie appears. */
+async function waitForManualLogin(cdpUrl: string, timeoutMs: number): Promise<string> {
+  if (process.stdin.isTTY) {
+    console.log("  Please login in the Chrome window:");
+    console.log("    1. Click 登录 → 2. Scan QR → 3. Press ENTER\n");
+    process.stdout.write("  Press ENTER > ");
+    for await (const _ of console) break;
+    try {
+      return await readConfirmedLogin(cdpUrl);
+    } catch {
+      throw new Error(
+        "Chrome does not have a Xueqiu login yet (missing xq_is_login). " +
+          "Confirm in the app, then press ENTER again.",
+      );
+    }
+  }
+
+  console.log("  stdin is not a TTY, so there is no ENTER prompt.");
+  console.log(`  Waiting until the Xueqiu login cookie appears in Chrome (${Math.round(timeoutMs / 1000)}s)...\n`);
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      return await readConfirmedLogin(cdpUrl);
+    } catch {
+      // Page may still be loading, or the user has not confirmed yet.
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error("Timed out waiting for Xueqiu login (stdin is not a TTY).");
+}
+
+function loginHelpText(): string {
+  return `
+  snowball login — Xueqiu login
+
+  snowball login
+  snowball login --qr-png <file.png> [--timeout 600]
+  snowball login --manual [--timeout 600]
+  snowball login --phone <number> [--area-code 86] [--no-wait] [--timeout 600]
+  snowball login --sms-code <code>
+  snowball login --captcha-click <x,y[;x,y]>
+
+  --phone sends an SMS, then prompts 请输入短信验证码:.
+  A wrong code prompts again and does not send another SMS.
+  GeeTest saves a PNG and prompts 请输入点击坐标 (x,y;x,y): while the widget is open.
+
+  With no TTY, or with --no-wait, the command saves ~/.snowball-cli/sms-login/session.json
+  (directory 0700, file 0600), prints SMS_SENT=1 or CAPTCHA_REQUIRED=<png>, and exits.
+  snowball login --sms-code <code> finishes that saved session.
+  If this process is killed after the SMS was sent, --sms-code still works.
+  The session expires after 10 minutes. A wrong code leaves it in place.
+
+  --help prints this text and does not start Chrome.
+`.replace(/^\n/, "");
+}
+
+/** Returns a process exit code. 1 means the SMS was rejected or did not finish. */
+async function finishSms(result: SmsCommandResult): Promise<number> {
+  if (result.status === "logged-in") {
+    saveToken({ cookie: result.cookie, extractedAt: new Date().toISOString(), source: "chrome-sms" });
+    console.log("LOGIN_OK=1");
+    console.log("\n  ✓ Login successful! Token saved.\n");
+    console.log("  Try: snowball quote SH600519\n");
+    return 0;
+  }
+  return result.status === "rejected" ? 1 : 0;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -191,39 +169,131 @@ const commands: Record<string, Record<string, Command>> = {
   // ── Auth ──────────────────────────────────────────────────────
   "Auth": {
     login: {
-      usage: "login [--manual] [--chrome <path>]",
-      desc: "QR code login (set CHROME_PATH or --chrome for custom Chrome)",
+      usage: "login [--phone <n>] [--sms-code <c>] [--qr-png <path>] [--timeout <sec>]",
+      desc: "QR login, or phone + SMS (prompts, or --no-wait)",
       run: async () => {
-        showLogo();
-        console.log("  Snowball CLI — Login\n");
-        await ensureChrome(CDP_URL);
-
-        if (hasFlag("manual")) {
-          console.log("  Opening xueqiu.com...\n");
-          await openXueqiuTab(CDP_URL);
-          console.log("  Please login in the Chrome window:");
-          console.log("    1. Click '登录' → 2. Scan QR → 3. Press ENTER\n");
-          process.stdout.write("  Press ENTER > ");
-          for await (const _ of console) break;
-          const cookie = await extractFromChrome(CDP_URL);
-          saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
-        } else {
-          console.log("  Opening xueqiu.com (background)...");
-          await openXueqiuTab(CDP_URL);
-          try {
-            const { cookie } = await qrLogin(CDP_URL);
-            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
-          } catch (e: any) {
-            console.error(`\n  QR failed: ${e.message}\n  Falling back to manual...\n`);
-            console.log("  Login in Chrome → press ENTER\n");
-            process.stdout.write("  Press ENTER > ");
-            for await (const _ of console) break;
-            const cookie = await extractFromChrome(CDP_URL);
-            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
-          }
+        if (process.argv.includes("--help") || process.argv.includes("-h")) {
+          console.log(loginHelpText());
+          return;
         }
-        console.log("\n  ✓ Login successful! Token saved.\n");
-        console.log("  Try: snowball quote SH600519\n");
+
+        const qrPng = flag("qr-png");
+        const phoneRaw = flag("phone");
+        const smsCode = flag("sms-code");
+        const captchaClick = flag("captcha-click");
+        const areaRaw = flag("area-code");
+        if (hasFlag("qr-png") && (!qrPng || qrPng.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --qr-png <path.png>\n");
+          process.exit(1);
+        }
+        if (hasFlag("phone") && (!phoneRaw || phoneRaw.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --phone <number> [--area-code 86]\n");
+          process.exit(1);
+        }
+        if (hasFlag("sms-code") && (!smsCode || smsCode.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --sms-code <code>\n");
+          process.exit(1);
+        }
+        if (hasFlag("captcha-click") && (!captchaClick || captchaClick.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --captcha-click <x,y>\n");
+          process.exit(1);
+        }
+        if (hasFlag("area-code") && (!areaRaw || areaRaw.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --area-code <code>   (default 86)\n");
+          process.exit(1);
+        }
+        if ((smsCode || captchaClick) && (phoneRaw || hasFlag("manual") || qrPng)) {
+          console.error("\n  Run --sms-code and --captcha-click in their own snowball login command.\n");
+          process.exit(1);
+        }
+        if (smsCode && captchaClick) {
+          console.error("\n  Pass --sms-code and --captcha-click as separate commands.\n");
+          process.exit(1);
+        }
+
+        const timeoutRaw = flag("timeout");
+        if (hasFlag("timeout") && (!timeoutRaw || timeoutRaw.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --timeout <seconds>   (default 600)\n");
+          process.exit(1);
+        }
+        let timeoutMs: number;
+        try {
+          timeoutMs = parseLoginTimeoutMs(timeoutRaw);
+        } catch (e: any) {
+          console.error(`\n  ${e.message}\n`);
+          process.exit(1);
+        }
+
+        let phone: string | undefined;
+        let areaCode: string | undefined;
+        if (phoneRaw) {
+          if (hasFlag("manual") || qrPng) {
+            throw new Error("--phone cannot be combined with --manual or --qr-png");
+          }
+          areaCode = normalizeAreaCode(areaRaw);
+          phone = normalizePhone(phoneRaw, areaCode);
+        }
+
+        const chromePath = flag("chrome") ?? process.env.CHROME_PATH;
+        let sms = false;
+        let exitCode = 0;
+        try {
+          if (smsCode || captchaClick || phone) {
+            sms = true;
+            armSmsProcessCleanup();
+          }
+          if (smsCode) {
+            exitCode = await finishSms(await completeSavedLogin(DATA_DIR, smsCode));
+          } else if (captchaClick) {
+            exitCode = await finishSms(await runCaptchaClick(CDP_URL, {
+              spec: captchaClick,
+              timeoutMs,
+              dataDir: DATA_DIR,
+              chromePath,
+            }));
+          } else if (phone && areaCode) {
+            showLogo();
+            console.log("  Snowball CLI — Login\n");
+            exitCode = await finishSms(await runPhoneLogin(CDP_URL, {
+              phone,
+              areaCode,
+              timeoutMs,
+              dataDir: DATA_DIR,
+              interactive: shouldPromptForSms(process.stdin.isTTY, hasFlag("no-wait")),
+              chromePath,
+            }));
+          } else {
+            showLogo();
+            console.log("  Snowball CLI — Login\n");
+            await ensureChrome(CDP_URL, chromePath);
+            console.log("  Opening xueqiu.com...\n");
+            await openXueqiuTab(CDP_URL);
+
+            if (hasFlag("manual")) {
+              const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
+              saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
+            } else {
+              try {
+                const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng, timeoutMs });
+                saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
+              } catch (e: any) {
+                // Agents and --qr-png must not block on ENTER. A TTY can still fall back.
+                if (qrPng || !process.stdin.isTTY) {
+                  throw new Error(`QR failed: ${e.message}`);
+                }
+                console.error(`\n  QR failed: ${e.message}\n  Falling back to manual...\n`);
+                const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
+                saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
+              }
+            }
+            console.log("\n  ✓ Login successful! Token saved.\n");
+            console.log("  Try: snowball quote SH600519\n");
+          }
+        } finally {
+          if (sms) stopSnowballChrome();
+          stopStartedXvfb();
+        }
+        if (exitCode !== 0) process.exit(exitCode);
       },
     },
     token: {

@@ -6,17 +6,40 @@
 
 ### `snowball login`
 
-终端内显示二维码，用雪球 App 扫码登录。自动查找 Chrome/Chromium 浏览器。
+终端内显示二维码，用雪球 App 扫码登录。自动查找 Chrome/Chromium。运行时必须是 Bun。
 
 ```bash
-snowball login                         # 默认，二维码在终端显示
-snowball login --manual                # 在 Chrome 窗口中扫码
+snowball login                          # 默认，二维码在终端显示
+snowball login --qr-png /tmp/xq.png     # 写出 PNG，打印 QR_PNG=路径，然后一直等待扫码确认
+snowball login --timeout 900            # 整段等待秒数，默认 600。过期会覆盖同一张 PNG 并再打印 QR_PNG=
+snowball login --manual                 # 在 Chrome 窗口中扫码（有 TTY 时按回车）
 snowball login --chrome /path/to/chrome # 指定浏览器路径
+snowball login --phone 13800138000      # 短信验证码登录，默认区号 86，接着提示输入验证码
+snowball login --phone 12345678 --area-code 45
+snowball login --phone 13800138000 --no-wait
+snowball login --sms-code 123456        # 用已保存的会话完成登录
+snowball login --captcha-click 120,80   # 用新的 GeeTest 窗口按截图像素点击并发出短信
+snowball login --help                   # 只打印用法，不会打开 Chrome
 ```
+
+没有雪球 App 时用 `--phone`。命令会打开 www.xueqiu.com 的「验证码登录」，勾选协议，点击「发送验证码」。
+
+- 短信一发出就写入 `~/.snowball-cli/sms-login/session.json`（目录 `0700`，文件 `0600`），然后关掉本次的 Chrome 和 Xvfb。
+- 有 TTY 时接着提示 `请输入短信验证码:`，在同一条命令里完成登录。验证码错了会再问几次，不会重新发短信。
+- stdin 不是 TTY，或加了 `--no-wait`：打印 `SMS_SENT=1` 后退出。`snowball login --sms-code <验证码>` 读取刚才的会话完成登录。交互进程在发码之后被杀掉也一样，不要为了补交验证码而重新发短信。
+- GeeTest（接口 `available: 1`）在有 TTY 时保存截图、打印 `CAPTCHA_REQUIRED=<路径>`，并提示 `请输入点击坐标 (x,y;x,y):`。没有 TTY 时打印路径后退出；`--captcha-click` 会重新打开验证码并点击（坐标要对应新的图）。
+- 验证码错误或过期打印 `SMS_CODE_REJECTED=1` 和 `SMS_ERROR=...`，会话还在，10 分钟内可以再执行 `--sms-code`。
+- 雪球返回 20099 时会带 `is_register=1` 再提交一次（自动注册）。
+- 只有 cookie 里有 `xq_is_login` 才打印 `LOGIN_OK=1` 并保存 token。手机号只以 `138****8000` 这种形式出现，不打印验证码和 cookie。
+- `snowball login --help` 和 `-h` 只打印说明，不会启动登录。
 
 浏览器查找顺序：`CHROME_PATH` 环境变量 → `--chrome` 参数 → Chrome → Chromium → 平台默认路径。
 
-VPS 上无 `DISPLAY` 时自动以 `--headless` 模式启动。二维码过期会自动刷新，最多 3 次。
+Linux 上会加 `--no-sandbox`，并在启动前删除 profile 目录里残留的 `SingletonLock` / `SingletonCookie` / `SingletonSocket`。没有 `DISPLAY` 时用 Xvfb 打开真实窗口：雪球的阿里云 WAF 不会给无头 Chrome 发 cookie。
+
+`--qr-png`，以及 stdin 不是 TTY 时，不会要求按回车。单个二维码大约 2 分钟没确认，或雪球返回过期，就会重新生成并覆盖原来的 PNG（再次打印 `QR_PNG=`），直到 `--timeout`（默认 600 秒）。登录结束或失败后，会关掉本次拉起的 Xvfb。
+
+轮询地址是 `https://www.xueqiu.com/snb/provider/query-qr-code-state`。对 apex `xueqiu.com` 发 GET 会 301 到 www，`fetch` 跟随重定向时丢掉 `Cookie`，接口就返回 HTTP 400。
 
 ### `snowball token <cookie>`
 

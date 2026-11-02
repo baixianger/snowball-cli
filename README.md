@@ -27,8 +27,11 @@ A CLI that wraps [Xueqiu (雪球)](https://xueqiu.com) APIs into JSON for AI age
 
 ## Install
 
+**Breaking:** as of 0.3.2 the `snowball` bin requires [Bun](https://bun.sh) on `PATH` (`#!/usr/bin/env bun`, Bun-targeted build). It does not run under Node (`console is not async iterable`). `npm install -g` without Bun will not start the CLI.
+
 ```bash
-npm install -g snowball-cli     # or: bun add -g snowball-cli
+curl -fsSL https://bun.sh/install | bash
+bun add -g snowball-cli
 ```
 
 > **VPS / Docker / OpenClaw?** See the [Setup Guide](https://github.com/baixianger/snowball-cli/blob/main/docs/setup.md).
@@ -54,8 +57,14 @@ snowball kol SH600519
 
 | Command | Description |
 |---|---|
-| `snowball login` | QR code in terminal — scan with Xueqiu app |
-| `snowball login --manual` | Opens Chrome window for you to scan |
+| `snowball login` | QR code in the terminal — scan with the Xueqiu app |
+| `snowball login --qr-png <file>` | Write a PNG and wait until the app confirms (no ENTER). For agents that send the image to a phone |
+| `snowball login --phone <number> [--area-code 86]` | Phone + SMS. Prompts `请输入短信验证码:` and finishes in this command. Default area code is 86; `45` is Denmark |
+| `snowball login --phone <number> --no-wait` | Send the SMS, print `SMS_SENT=1`, and exit. Same when stdin is not a TTY |
+| `snowball login --sms-code <code>` | Finish from the saved session (after `--no-wait`, or if the prompt was killed) |
+| `snowball login --captcha-click <x,y>` | Resume a saved GeeTest challenge and send the SMS. Coordinates are pixels in the PNG |
+| `snowball login --timeout <seconds>` | How long QR refresh or the SMS send may run (default 600) |
+| `snowball login --manual` | Opens a Chrome window for you to scan |
 | `snowball token <cookie>` | Paste cookie from DevTools |
 | `snowball export` / `import <b64>` | Transfer token between machines |
 | `snowball status` | Verify token is active |
@@ -152,13 +161,40 @@ snowball profile <id>
 ## How login works
 
 ```
-snowball login
+snowball login [--qr-png <file>]
   ├─ Find Chrome/Chromium (CHROME_PATH > --chrome > auto-detect)
-  ├─ Start browser (auto-headless on VPS) → xueqiu.com → solve WAF
-  ├─ Generate QR via API → render in terminal
-  ├─ Poll scan status → auto-regenerate if expired (3x)
-  ├─ Fallback to manual Chrome mode if QR fails
-  └─ Save cookies to ~/.snowball-cli/token.json
+  ├─ Linux: --no-sandbox, drop stale Singleton* locks
+  ├─ No DISPLAY: Xvfb + a real window (headless Chrome cannot pass Xueqiu's WAF)
+  ├─ Open www.xueqiu.com → read WAF cookies
+  ├─ POST /snb/provider/generate-qr-code
+  ├─ Print a terminal QR and/or write a PNG (QR_PNG=<path>)
+  ├─ GET https://www.xueqiu.com/snb/provider/query-qr-code-state
+  │    (the apex host 301s here and fetch() would drop Cookie, which is HTTP 400.
+  │     Redirects are followed only to https://*.xueqiu.com.)
+  ├─ On expiry or a 2 min silence, refresh the QR until --timeout (default 10 min)
+  ├─ Wait until the app confirms. No ENTER when stdin is not a TTY, or when --qr-png is set
+  ├─ Stop the Xvfb this command started
+  └─ Save cookies to ~/.snowball-cli/token.json (file 0600, directory 0700)
+
+snowball login --phone <number> [--area-code 86] [--no-wait] [--timeout 600]
+  ├─ Same Chrome / Xvfb startup as the QR flow
+  ├─ Open the www.xueqiu.com login modal (验证码登录)
+  ├─ Check 阅读并同意, fill the number, click 发送验证码
+  ├─ GeeTest (available:1) on a TTY → CAPTCHA_REQUIRED=<png>
+  │    then prompt 请输入点击坐标 (x,y;x,y): while that widget is still open
+  ├─ No TTY, or a captcha with no coordinates yet → save the session and exit
+  │    snowball login --captcha-click x,y   resumes, sends, and exits
+  ├─ On send, write ~/.snowball-cli/sms-login/session.json (dir 0700, file 0600)
+  │    and stop Chrome and the Xvfb this command started
+  ├─ A TTY prompts 请输入短信验证码: and POSTs /snb/provider/login (SM4)
+  │    A wrong code prompts again and does not send another SMS
+  ├─ No TTY, or --no-wait → print SMS_SENT=1 and exit
+  │    snowball login --sms-code <code> finishes from the saved session
+  │    Killing the prompt after the SMS was sent still leaves that file
+  ├─ Error 20099 resubmits once with is_register=1
+  ├─ LOGIN_OK=1 only when xq_is_login is set; token.json stays mode 0600
+  └─ The session expires after 10 minutes. A wrong code leaves it in place.
+     The phone, code, and cookies are not logged
 ```
 
 ## License
