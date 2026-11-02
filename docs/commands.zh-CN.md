@@ -11,6 +11,7 @@
 ```bash
 snowball login                          # 默认，二维码在终端显示
 snowball login --qr-png /tmp/xq.png     # 写出 PNG，打印 QR_PNG=路径，然后一直等待扫码确认
+snowball login --timeout 900            # 整段等待秒数，默认 600。过期会覆盖同一张 PNG 并再打印 QR_PNG=
 snowball login --manual                 # 在 Chrome 窗口中扫码（有 TTY 时按回车）
 snowball login --chrome /path/to/chrome # 指定浏览器路径
 ```
@@ -19,7 +20,7 @@ snowball login --chrome /path/to/chrome # 指定浏览器路径
 
 Linux 上会加 `--no-sandbox`，并在启动前删除 profile 目录里残留的 `SingletonLock` / `SingletonCookie` / `SingletonSocket`。没有 `DISPLAY` 时用 Xvfb 打开真实窗口：雪球的阿里云 WAF 不会给无头 Chrome 发 cookie。
 
-`--qr-png`，以及 stdin 不是 TTY 时，不会要求按回车。二维码过期会自动刷新，最多 3 次。
+`--qr-png`，以及 stdin 不是 TTY 时，不会要求按回车。单个二维码大约 2 分钟没确认，或雪球返回过期，就会重新生成并覆盖原来的 PNG（再次打印 `QR_PNG=`），直到 `--timeout`（默认 600 秒）。登录结束或失败后，会关掉本次拉起的 Xvfb。
 
 轮询地址是 `https://www.xueqiu.com/snb/provider/query-qr-code-state`。对 apex `xueqiu.com` 发 GET 会 301 到 www，`fetch` 跟随重定向时丢掉 `Cookie`，接口就返回 HTTP 400。
 

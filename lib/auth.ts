@@ -7,15 +7,21 @@
  *   2. Manual: user pastes token from browser devtools
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+import { existsSync, writeFileSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { secureDirectory, secureFile } from "./private";
 
 const DATA_DIR = join(homedir(), ".snowball-cli");
 const TOKEN_PATH = join(DATA_DIR, "token.json");
 const XUEQIU_HOST = "xueqiu.com";
 
-mkdirSync(DATA_DIR, { recursive: true });
+function ensureDataDir(): void {
+  secureDirectory(DATA_DIR);
+  if (existsSync(TOKEN_PATH)) secureFile(TOKEN_PATH);
+}
+
+ensureDataDir();
 
 export interface TokenData {
   cookie: string;
@@ -23,9 +29,11 @@ export interface TokenData {
   source: "chrome" | "chrome-qr" | "manual";
 }
 
-/** Save token to disk */
+/** Save token to disk (owner read/write only). */
 export function saveToken(data: TokenData): void {
-  writeFileSync(TOKEN_PATH, JSON.stringify(data, null, 2), "utf-8");
+  ensureDataDir();
+  writeFileSync(TOKEN_PATH, JSON.stringify(data, null, 2), { encoding: "utf-8", mode: 0o600 });
+  secureFile(TOKEN_PATH);
 }
 
 /** Load saved token */

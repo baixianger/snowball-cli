@@ -27,7 +27,7 @@ A CLI that wraps [Xueqiu (雪球)](https://xueqiu.com) APIs into JSON for AI age
 
 ## Install
 
-Bun is the runtime. The `snowball` bin is `#!/usr/bin/env bun` (login uses Bun-only APIs such as `for await` of `console`). Node cannot run it.
+**Breaking:** as of 0.3.2 the `snowball` bin requires [Bun](https://bun.sh) on `PATH` (`#!/usr/bin/env bun`, Bun-targeted build). It does not run under Node (`console is not async iterable`). `npm install -g` without Bun will not start the CLI.
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
@@ -59,6 +59,7 @@ snowball kol SH600519
 |---|---|
 | `snowball login` | QR code in the terminal — scan with the Xueqiu app |
 | `snowball login --qr-png <file>` | Write a PNG and wait until the app confirms (no ENTER). For agents that send the image to a phone |
+| `snowball login --timeout <seconds>` | How long to keep refreshing the QR (default 600). Each refresh overwrites the PNG and prints `QR_PNG=` again |
 | `snowball login --manual` | Opens a Chrome window for you to scan |
 | `snowball token <cookie>` | Paste cookie from DevTools |
 | `snowball export` / `import <b64>` | Transfer token between machines |
@@ -164,9 +165,12 @@ snowball login [--qr-png <file>]
   ├─ POST /snb/provider/generate-qr-code
   ├─ Print a terminal QR and/or write a PNG (QR_PNG=<path>)
   ├─ GET https://www.xueqiu.com/snb/provider/query-qr-code-state
-  │    (the apex host 301s here and fetch() would drop Cookie, which is HTTP 400)
+  │    (the apex host 301s here and fetch() would drop Cookie, which is HTTP 400.
+  │     Redirects are followed only to https://*.xueqiu.com.)
+  ├─ On expiry or a 2 min silence, refresh the QR until --timeout (default 10 min)
   ├─ Wait until the app confirms. No ENTER when stdin is not a TTY, or when --qr-png is set
-  └─ Save cookies to ~/.snowball-cli/token.json
+  ├─ Stop the Xvfb this command started
+  └─ Save cookies to ~/.snowball-cli/token.json (file 0600, directory 0700)
 ```
 
 ## License

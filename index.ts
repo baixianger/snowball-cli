@@ -11,8 +11,8 @@ import {
   loadToken,
   verifyToken,
 } from "./lib/auth";
-import { qrLogin, hasLoginCookie, getWafCookies } from "./lib/qr-terminal";
-import { ensureChrome, openXueqiuTab } from "./lib/browser";
+import { qrLogin, hasLoginCookie, getWafCookies, parseLoginTimeoutMs } from "./lib/qr-terminal";
+import { ensureChrome, openXueqiuTab, stopStartedXvfb } from "./lib/browser";
 import * as api from "./lib/api";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -77,7 +77,7 @@ async function readConfirmedLogin(cdpUrl: string): Promise<string> {
 }
 
 /** Manual login. A TTY waits for ENTER; otherwise poll Chrome until the session cookie appears. */
-async function waitForManualLogin(cdpUrl: string): Promise<string> {
+async function waitForManualLogin(cdpUrl: string, timeoutMs: number): Promise<string> {
   if (process.stdin.isTTY) {
     console.log("  Please login in the Chrome window:");
     console.log("    1. Click 登录 → 2. Scan QR → 3. Press ENTER\n");
@@ -94,9 +94,9 @@ async function waitForManualLogin(cdpUrl: string): Promise<string> {
   }
 
   console.log("  stdin is not a TTY, so there is no ENTER prompt.");
-  console.log("  Waiting until the Xueqiu login cookie appears in Chrome (2 min)...\n");
+  console.log(`  Waiting until the Xueqiu login cookie appears in Chrome (${Math.round(timeoutMs / 1000)}s)...\n`);
   const start = Date.now();
-  while (Date.now() - start < 120000) {
+  while (Date.now() - start < timeoutMs) {
     try {
       return await readConfirmedLogin(cdpUrl);
     } catch {
@@ -122,8 +122,8 @@ const commands: Record<string, Record<string, Command>> = {
   // ── Auth ──────────────────────────────────────────────────────
   "Auth": {
     login: {
-      usage: "login [--manual] [--qr-png <path>] [--chrome <path>]",
-      desc: "QR login. --qr-png writes a PNG and waits (no ENTER)",
+      usage: "login [--manual] [--qr-png <path>] [--timeout <sec>] [--chrome <path>]",
+      desc: "QR login. Default wait 10 min; --qr-png writes a PNG (no ENTER)",
       run: async () => {
         showLogo();
         console.log("  Snowball CLI — Login\n");
@@ -132,31 +132,48 @@ const commands: Record<string, Record<string, Command>> = {
           console.error("\n  Usage: snowball login --qr-png <path.png>\n");
           process.exit(1);
         }
-        await ensureChrome(CDP_URL, flag("chrome") ?? process.env.CHROME_PATH);
-
-        if (hasFlag("manual")) {
-          console.log("  Opening xueqiu.com...\n");
-          await openXueqiuTab(CDP_URL);
-          const cookie = await waitForManualLogin(CDP_URL);
-          saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
-        } else {
-          console.log("  Opening xueqiu.com (background)...");
-          await openXueqiuTab(CDP_URL);
-          try {
-            const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng });
-            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
-          } catch (e: any) {
-            // Agents and --qr-png must not block on ENTER. A TTY can still fall back.
-            if (qrPng || !process.stdin.isTTY) {
-              throw new Error(`QR failed: ${e.message}`);
-            }
-            console.error(`\n  QR failed: ${e.message}\n  Falling back to manual...\n`);
-            const cookie = await waitForManualLogin(CDP_URL);
-            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
-          }
+        const timeoutRaw = flag("timeout");
+        if (hasFlag("timeout") && (!timeoutRaw || timeoutRaw.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --timeout <seconds>   (default 600)\n");
+          process.exit(1);
         }
-        console.log("\n  ✓ Login successful! Token saved.\n");
-        console.log("  Try: snowball quote SH600519\n");
+        let timeoutMs: number;
+        try {
+          timeoutMs = parseLoginTimeoutMs(timeoutRaw);
+        } catch (e: any) {
+          console.error(`\n  ${e.message}\n`);
+          process.exit(1);
+        }
+
+        try {
+          await ensureChrome(CDP_URL, flag("chrome") ?? process.env.CHROME_PATH);
+
+          if (hasFlag("manual")) {
+            console.log("  Opening xueqiu.com...\n");
+            await openXueqiuTab(CDP_URL);
+            const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
+            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
+          } else {
+            console.log("  Opening xueqiu.com (background)...");
+            await openXueqiuTab(CDP_URL);
+            try {
+              const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng, timeoutMs });
+              saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
+            } catch (e: any) {
+              // Agents and --qr-png must not block on ENTER. A TTY can still fall back.
+              if (qrPng || !process.stdin.isTTY) {
+                throw new Error(`QR failed: ${e.message}`);
+              }
+              console.error(`\n  QR failed: ${e.message}\n  Falling back to manual...\n`);
+              const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
+              saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
+            }
+          }
+          console.log("\n  ✓ Login successful! Token saved.\n");
+          console.log("  Try: snowball quote SH600519\n");
+        } finally {
+          stopStartedXvfb();
+        }
       },
     },
     token: {

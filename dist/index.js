@@ -14,12 +14,30 @@ var __esm = (fn, res, err) => () => {
 };
 var __require = import.meta.require;
 
+// lib/private.ts
+import { chmodSync, mkdirSync } from "fs";
+function secureDirectory(dir) {
+  mkdirSync(dir, { recursive: true, mode: 448 });
+  chmodSync(dir, 448);
+}
+function secureFile(path) {
+  chmodSync(path, 384);
+}
+var init_private = () => {};
+
 // lib/auth.ts
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+import { existsSync, writeFileSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+function ensureDataDir() {
+  secureDirectory(DATA_DIR);
+  if (existsSync(TOKEN_PATH))
+    secureFile(TOKEN_PATH);
+}
 function saveToken(data) {
-  writeFileSync(TOKEN_PATH, JSON.stringify(data, null, 2), "utf-8");
+  ensureDataDir();
+  writeFileSync(TOKEN_PATH, JSON.stringify(data, null, 2), { encoding: "utf-8", mode: 384 });
+  secureFile(TOKEN_PATH);
 }
 function loadToken() {
   if (!existsSync(TOKEN_PATH))
@@ -66,9 +84,10 @@ async function verifyToken(cookie) {
 }
 var DATA_DIR, TOKEN_PATH;
 var init_auth = __esm(() => {
+  init_private();
   DATA_DIR = join(homedir(), ".snowball-cli");
   TOKEN_PATH = join(DATA_DIR, "token.json");
-  mkdirSync(DATA_DIR, { recursive: true });
+  ensureDataDir();
 });
 
 // node_modules/qrcode/lib/can-promise.js
@@ -4245,7 +4264,7 @@ var require_browser = __commonJS(function(exports) {
 // index.ts
 init_auth();
 import { readFileSync as readFileSync2 } from "fs";
-import { join as join3, dirname as dirname2 } from "path";
+import { join as join3, dirname as dirname3 } from "path";
 import { fileURLToPath } from "url";
 
 // lib/qr-terminal.ts
@@ -4416,6 +4435,22 @@ function readSetCookie(res) {
 function cookiePairsFromSetCookie(setCookies) {
   return setCookies.map((line) => line.split(";")[0]?.trim()).filter((pair) => Boolean(pair && pair.includes("="))).join("; ");
 }
+function isXueqiuHostname(hostname) {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return host === "xueqiu.com" || host.endsWith(".xueqiu.com");
+}
+function assertXueqiuRedirect(currentUrl, location) {
+  let next;
+  try {
+    next = new URL(location, currentUrl);
+  } catch {
+    throw new Error(`Refusing to follow invalid redirect: ${location}`);
+  }
+  if (next.protocol !== "https:" || !isXueqiuHostname(next.hostname)) {
+    throw new Error(`Refusing to follow redirect to ${next.origin} with Xueqiu cookies`);
+  }
+  return next.toString();
+}
 async function fetchXueqiu(url, cookie, init = {}, redirects = 0) {
   const headers = new Headers(init.headers);
   for (const [key, value] of Object.entries(HEADERS)) {
@@ -4430,11 +4465,30 @@ async function fetchXueqiu(url, cookie, init = {}, redirects = 0) {
   if (response.status >= 300 && response.status < 400 && redirects < 5) {
     const location = response.headers.get("location");
     if (location) {
+      const next = assertXueqiuRedirect(url, location);
       await response.arrayBuffer().catch(() => {});
-      return fetchXueqiu(new URL(location, url).toString(), nextCookie, init, redirects + 1);
+      return fetchXueqiu(next, nextCookie, init, redirects + 1);
     }
   }
   return { response, cookie: nextCookie };
+}
+var DEFAULT_LOGIN_TIMEOUT_SEC = 600;
+var DEFAULT_LOGIN_TIMEOUT_MS = DEFAULT_LOGIN_TIMEOUT_SEC * 1000;
+var QR_REFRESH_MS = 120000;
+function parseLoginTimeoutMs(raw) {
+  if (raw === undefined || raw === "")
+    return DEFAULT_LOGIN_TIMEOUT_MS;
+  if (!/^\d+(\.\d+)?$/.test(raw.trim())) {
+    throw new Error("--timeout expects seconds, for example --timeout 600 (default 600)");
+  }
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error("--timeout expects a positive number of seconds (default 600)");
+  }
+  return Math.round(seconds * 1000);
+}
+function shouldRefreshQr(result) {
+  return result === "EXPIRED" || result === "TIMEOUT";
 }
 function cookiesFromTarget(webSocketDebuggerUrl) {
   const ws = new WebSocket(webSocketDebuggerUrl);
@@ -4548,7 +4602,7 @@ async function cookiesFromConfirm(cookie, payload, cdpUrl) {
   } catch {}
   throw new Error("Login was confirmed but xq_is_login was not in the response cookies. " + 'Try again, or paste a cookie with: snowball token "xq_a_token=...; u=..."');
 }
-async function pollQRStatus(code, wafCookies, cdpUrl, timeoutMs = 120000) {
+async function pollQRStatus(code, wafCookies, cdpUrl, timeoutMs = QR_REFRESH_MS) {
   const startTime = Date.now();
   const pollInterval = 2500;
   let cookie = wafCookies;
@@ -4585,9 +4639,12 @@ async function pollQRStatus(code, wafCookies, cdpUrl, timeoutMs = 120000) {
     } else {
       process.stdout.write(decision.type === "scanned" ? "\u2713" : ".");
     }
-    await new Promise((r) => setTimeout(r, pollInterval));
+    const remaining = timeoutMs - (Date.now() - startTime);
+    if (remaining <= 0)
+      break;
+    await new Promise((r) => setTimeout(r, Math.min(pollInterval, remaining)));
   }
-  throw new Error("Login timeout (2 min). QR code may have expired.");
+  return "TIMEOUT";
 }
 async function presentQR(qrUrl, options) {
   if (options.qrPngPath) {
@@ -4622,46 +4679,57 @@ async function qrLogin(cdpUrl, options = {}) {
   console.log(`
   \u2713 Got WAF cookies
 `);
-  const MAX_QR_ATTEMPTS = 3;
-  for (let attempt = 1;attempt <= MAX_QR_ATTEMPTS; attempt++) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  let round = 0;
+  while (Date.now() < deadline) {
+    round++;
+    if (round > 1) {
+      console.log(`
+  QR was not confirmed. Generating a new one.
+`);
+    }
     console.log("  Generating QR code...");
     const generated = await generateQRCode(wafCookies);
     wafCookies = generated.cookie;
     console.log(`  \u2713 QR code ready
 `);
-    if (options.qrPngPath) {
-      console.log("  Scan this image with the Xueqiu app, then tap \u786E\u8BA4\u767B\u5F55.");
-      console.log(`  This command waits until that finishes. No need to press ENTER.
+    if (round === 1) {
+      const seconds = Math.round(timeoutMs / 1000);
+      if (options.qrPngPath) {
+        console.log("  Scan this image with the Xueqiu app, then tap \u786E\u8BA4\u767B\u5F55.");
+        console.log("  This command waits until that finishes. No need to press ENTER.");
+        console.log(`  The image is refreshed in place for ${seconds}s. Watch for a new QR_PNG= line.
 `);
-    } else if (process.stdout.isTTY) {
-      console.log("  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510");
-      console.log("  \u2502  Scan this QR with the Xueqiu app  \u2502");
-      console.log(`  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518
+      } else if (process.stdout.isTTY) {
+        console.log("  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510");
+        console.log("  \u2502  Scan this QR with the Xueqiu app  \u2502");
+        console.log(`  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518
 `);
+      }
     }
     await presentQR(generated.qrUrl, options);
+    const slice = Math.min(QR_REFRESH_MS, deadline - Date.now());
+    if (slice <= 0)
+      break;
     console.log("  Waiting for scan");
     process.stdout.write("  ");
-    const cookie = await pollQRStatus(generated.code, wafCookies, cdpUrl);
-    if (cookie === "EXPIRED") {
-      if (attempt < MAX_QR_ATTEMPTS) {
-        console.log(`
-  QR expired. Generating a new one... (${attempt}/${MAX_QR_ATTEMPTS})
-`);
-        continue;
-      }
-      throw new Error("QR code expired 3 times. Run snowball login again.");
-    }
+    const cookie = await pollQRStatus(generated.code, wafCookies, cdpUrl, slice);
+    if (shouldRefreshQr(cookie))
+      continue;
     return { cookie, code: generated.code };
   }
-  throw new Error("QR login failed after retries");
+  const minutes = Math.max(1, Math.round(timeoutMs / 60000));
+  throw new Error(`Login timed out after ${minutes} min. The QR was refreshed until then. Run snowball login again.`);
 }
 
 // lib/browser.ts
+init_private();
 import { execFileSync, spawn } from "child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, rmSync } from "fs";
-import { homedir as homedir2, platform } from "os";
-import { join as join2 } from "path";
+import { randomBytes } from "crypto";
+import { existsSync as existsSync2, rmSync, writeFileSync as writeFileSync2 } from "fs";
+import { homedir as homedir2, hostname, platform, tmpdir } from "os";
+import { dirname as dirname2, join as join2 } from "path";
 var CHROME_PROFILE_DIR = join2(homedir2(), ".snowball-cli", "chrome-profile");
 var CHROME_SINGLETON_FILES = ["SingletonLock", "SingletonCookie", "SingletonSocket"];
 var LINUX_SANDBOX_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"];
@@ -4789,28 +4857,121 @@ async function cdpReady(cdpUrl) {
     return false;
   }
 }
+function xvfbArgs(display, authFile) {
+  return [display, "-screen", "0", "1280x800x24", "-nolisten", "tcp", "-auth", authFile];
+}
+function u16be(n) {
+  const buf = Buffer.alloc(2);
+  buf.writeUInt16BE(n);
+  return buf;
+}
+function xauthRecord(host, displayNumber, cookie) {
+  const address = Buffer.from(host);
+  const number = Buffer.from(displayNumber);
+  const name = Buffer.from("MIT-MAGIC-COOKIE-1");
+  return Buffer.concat([
+    u16be(256),
+    u16be(address.length),
+    address,
+    u16be(number.length),
+    number,
+    u16be(name.length),
+    name,
+    u16be(cookie.length),
+    cookie
+  ]);
+}
+function buildXauthority(display) {
+  const displayNumber = display.replace(/^:/, "");
+  const cookie = randomBytes(16);
+  const records = [xauthRecord(hostname() || "localhost", displayNumber, cookie)];
+  if ((hostname() || "") !== "localhost") {
+    records.push(xauthRecord("localhost", displayNumber, cookie));
+  }
+  return Buffer.concat(records);
+}
+var startedXvfb = null;
+var xvfbHookInstalled = false;
+function installXvfbStopHook() {
+  if (xvfbHookInstalled)
+    return;
+  xvfbHookInstalled = true;
+  const halt = (code) => {
+    stopStartedXvfb();
+    process.exit(code);
+  };
+  process.on("exit", () => stopStartedXvfb());
+  process.once("SIGINT", () => halt(130));
+  process.once("SIGTERM", () => halt(143));
+}
+function stopStartedXvfb() {
+  const started = startedXvfb;
+  startedXvfb = null;
+  if (!started)
+    return;
+  const pid = started.child.pid;
+  if (pid) {
+    try {
+      process.kill(-pid, "SIGTERM");
+    } catch {
+      try {
+        started.child.kill("SIGTERM");
+      } catch {}
+    }
+  }
+  rmSync(started.authFile, { force: true });
+}
 async function startXvfb() {
   if (!commandExists("Xvfb"))
     return null;
+  installXvfbStopHook();
   for (let n = 99;n <= 109; n++) {
     const display = `:${n}`;
     const sock = `/tmp/.X11-unix/X${n}`;
     if (existsSync2(sock))
       continue;
-    const child = spawn("Xvfb", [display, "-screen", "0", "1280x800x24", "-ac", "-nolisten", "tcp"], { stdio: "ignore", detached: true });
+    const authFile = join2(tmpdir(), `snowball-xvfb-${process.pid}-${n}.xauth`);
+    writeFileSync2(authFile, buildXauthority(display), { mode: 384 });
+    secureFile(authFile);
+    const child = spawn("Xvfb", xvfbArgs(display, authFile), {
+      stdio: "ignore",
+      detached: true
+    });
     child.unref();
+    let ready = false;
     for (let i = 0;i < 20; i++) {
-      if (existsSync2(sock))
-        return display;
+      if (existsSync2(sock)) {
+        ready = true;
+        break;
+      }
+      if (child.exitCode !== null)
+        break;
       await sleep(100);
     }
+    if (!ready) {
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch {
+          try {
+            child.kill("SIGTERM");
+          } catch {}
+        }
+      }
+      rmSync(authFile, { force: true });
+      continue;
+    }
+    startedXvfb = { child, authFile, display };
+    return { display, authFile };
   }
   return null;
 }
-function spawnChrome(bin, args, display) {
+function spawnChrome(bin, args, display, xauthority) {
   const env = { ...process.env };
   if (display)
     env.DISPLAY = display;
+  if (xauthority)
+    env.XAUTHORITY = xauthority;
   let stderrText = "";
   const child = spawn(bin, args, {
     stdio: ["ignore", "ignore", "pipe"],
@@ -4825,10 +4986,13 @@ function spawnChrome(bin, args, display) {
   return { stderr: () => stderrText };
 }
 async function ensureChrome(cdpUrl, chromePath) {
+  secureDirectory(dirname2(CHROME_PROFILE_DIR));
+  if (existsSync2(CHROME_PROFILE_DIR))
+    secureDirectory(CHROME_PROFILE_DIR);
   if (await cdpReady(cdpUrl))
     return;
   const profileDir = CHROME_PROFILE_DIR;
-  mkdirSync3(profileDir, { recursive: true });
+  secureDirectory(profileDir);
   const bin = findChrome(chromePath);
   const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
   const xvfbAvailable = platform() === "linux" && !hasDisplay && commandExists("Xvfb");
@@ -4839,10 +5003,10 @@ async function ensureChrome(cdpUrl, chromePath) {
     profileDir,
     port: debugPort(cdpUrl)
   });
-  let display;
+  let session = null;
   if (plan.mode === "xvfb") {
-    display = await startXvfb() ?? undefined;
-    if (!display) {
+    session = await startXvfb();
+    if (!session) {
       plan.args.push("--headless=new");
       plan.headless = true;
       plan.mode = "headless";
@@ -4853,7 +5017,7 @@ async function ensureChrome(cdpUrl, chromePath) {
     console.log("  Xueqiu's WAF blocks headless Chrome, so login will probably fail.");
     console.log("  Install Xvfb (`apt install -y xvfb`) or import a token from another machine.\n");
   } else if (plan.mode === "xvfb") {
-    console.log(`  Starting Chrome on virtual display ${display} (Xvfb).`);
+    console.log(`  Starting Chrome on virtual display ${session?.display} (Xvfb).`);
     console.log(`  Headless Chrome cannot get Xueqiu WAF cookies; this is a real browser window.
 `);
   } else {
@@ -4864,7 +5028,7 @@ async function ensureChrome(cdpUrl, chromePath) {
     stopProfileChrome(profileDir);
     await sleep(attempt === 1 ? 200 : 500);
     clearStaleChromeLocks(profileDir);
-    const child = spawnChrome(bin, plan.args, display);
+    const child = spawnChrome(bin, plan.args, session?.display, session?.authFile);
     for (let i = 0;i < 20; i++) {
       await sleep(500);
       if (await cdpReady(cdpUrl))
@@ -4872,6 +5036,7 @@ async function ensureChrome(cdpUrl, chromePath) {
     }
     lastStderr = child.stderr();
   }
+  stopStartedXvfb();
   const tail = lastStderr.trim() ? `
 ${lastStderr.trim()}
 ` : "";
@@ -5266,7 +5431,7 @@ async function fundGrowth(code, period = "ty") {
 }
 
 // index.ts
-var __dirname2 = dirname2(fileURLToPath(import.meta.url));
+var __dirname2 = dirname3(fileURLToPath(import.meta.url));
 var CDP_URL = process.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://127.0.0.1:9222";
 var MODE = process.argv[2];
 var VERSION = "0.3.2";
@@ -5314,7 +5479,7 @@ async function readConfirmedLogin(cdpUrl) {
   }
   return cookie;
 }
-async function waitForManualLogin(cdpUrl) {
+async function waitForManualLogin(cdpUrl, timeoutMs) {
   if (process.stdin.isTTY) {
     console.log("  Please login in the Chrome window:");
     console.log(`    1. Click \u767B\u5F55 \u2192 2. Scan QR \u2192 3. Press ENTER
@@ -5329,10 +5494,10 @@ async function waitForManualLogin(cdpUrl) {
     }
   }
   console.log("  stdin is not a TTY, so there is no ENTER prompt.");
-  console.log(`  Waiting until the Xueqiu login cookie appears in Chrome (2 min)...
+  console.log(`  Waiting until the Xueqiu login cookie appears in Chrome (${Math.round(timeoutMs / 1000)}s)...
 `);
   const start = Date.now();
-  while (Date.now() - start < 120000) {
+  while (Date.now() - start < timeoutMs) {
     try {
       return await readConfirmedLogin(cdpUrl);
     } catch {}
@@ -5343,8 +5508,8 @@ async function waitForManualLogin(cdpUrl) {
 var commands = {
   Auth: {
     login: {
-      usage: "login [--manual] [--qr-png <path>] [--chrome <path>]",
-      desc: "QR login. --qr-png writes a PNG and waits (no ENTER)",
+      usage: "login [--manual] [--qr-png <path>] [--timeout <sec>] [--chrome <path>]",
+      desc: "QR login. Default wait 10 min; --qr-png writes a PNG (no ENTER)",
       run: async () => {
         showLogo();
         console.log(`  Snowball CLI \u2014 Login
@@ -5356,36 +5521,56 @@ var commands = {
 `);
           process.exit(1);
         }
-        await ensureChrome(CDP_URL, flag("chrome") ?? process.env.CHROME_PATH);
-        if (hasFlag("manual")) {
-          console.log(`  Opening xueqiu.com...
+        const timeoutRaw = flag("timeout");
+        if (hasFlag("timeout") && (!timeoutRaw || timeoutRaw.startsWith("-"))) {
+          console.error(`
+  Usage: snowball login --timeout <seconds>   (default 600)
 `);
-          await openXueqiuTab(CDP_URL);
-          const cookie = await waitForManualLogin(CDP_URL);
-          saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
-        } else {
-          console.log("  Opening xueqiu.com (background)...");
-          await openXueqiuTab(CDP_URL);
-          try {
-            const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng });
-            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
-          } catch (e) {
-            if (qrPng || !process.stdin.isTTY) {
-              throw new Error(`QR failed: ${e.message}`);
-            }
-            console.error(`
+          process.exit(1);
+        }
+        let timeoutMs;
+        try {
+          timeoutMs = parseLoginTimeoutMs(timeoutRaw);
+        } catch (e) {
+          console.error(`
+  ${e.message}
+`);
+          process.exit(1);
+        }
+        try {
+          await ensureChrome(CDP_URL, flag("chrome") ?? process.env.CHROME_PATH);
+          if (hasFlag("manual")) {
+            console.log(`  Opening xueqiu.com...
+`);
+            await openXueqiuTab(CDP_URL);
+            const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
+            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
+          } else {
+            console.log("  Opening xueqiu.com (background)...");
+            await openXueqiuTab(CDP_URL);
+            try {
+              const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng, timeoutMs });
+              saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
+            } catch (e) {
+              if (qrPng || !process.stdin.isTTY) {
+                throw new Error(`QR failed: ${e.message}`);
+              }
+              console.error(`
   QR failed: ${e.message}
   Falling back to manual...
 `);
-            const cookie = await waitForManualLogin(CDP_URL);
-            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
+              const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
+              saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
+            }
           }
-        }
-        console.log(`
+          console.log(`
   \u2713 Login successful! Token saved.
 `);
-        console.log(`  Try: snowball quote SH600519
+          console.log(`  Try: snowball quote SH600519
 `);
+        } finally {
+          stopStartedXvfb();
+        }
       }
     },
     token: {

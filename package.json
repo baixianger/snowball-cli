@@ -56,7 +56,8 @@
     "lib/",
     "SKILL.md",
     "README.md",
-    "README.zh-CN.md"
+    "README.zh-CN.md",
+    "CHANGELOG.md"
   ],
   "devDependencies": {
     "@types/bun": "latest",

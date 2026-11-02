@@ -27,7 +27,7 @@
 
 ## 安装
 
-运行时是 Bun。安装后的 `snowball` 是 `#!/usr/bin/env bun`（登录用了 Bun 才有的 `for await (const line of console)`）。不要用 Node 跑。
+**不兼容变更：** 从 0.3.2 起，`snowball` 必须用 Bun 运行（`#!/usr/bin/env bun`，构建目标是 Bun）。不能再用 Node（会报 `console is not async iterable`）。没装 Bun 时 `npm install -g` 也起不来。
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
@@ -148,8 +148,10 @@ snowball login [--qr-png <文件>]
   ├─ 终端二维码，和/或写 PNG（打印 QR_PNG=<路径>）
   ├─ GET https://www.xueqiu.com/snb/provider/query-qr-code-state
   │    （apex 域名会 301 到 www，fetch 跟着重定向时会丢掉 Cookie，于是 HTTP 400）
+  ├─ 过期或约 2 分钟没人扫就换一张新二维码，直到 `--timeout`（默认 10 分钟）
   ├─ 一直等到 App 里点确认。stdin 不是 TTY，或用了 --qr-png 时，不需要按回车
-  └─ 保存 Cookie 到 ~/.snowball-cli/token.json
+  ├─ 关掉本次启动的 Xvfb
+  └─ 保存 Cookie 到 ~/.snowball-cli/token.json（文件 0600，目录 0700）
 ```
 
 ## 协议

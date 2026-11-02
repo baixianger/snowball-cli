@@ -9,10 +9,12 @@
  *     gets those cookies, so a missing DISPLAY uses Xvfb instead of headless.
  */
 
-import { execFileSync, spawn } from "child_process";
-import { existsSync, mkdirSync, rmSync } from "fs";
-import { homedir, platform } from "os";
-import { join } from "path";
+import { execFileSync, spawn, type ChildProcess } from "child_process";
+import { randomBytes } from "crypto";
+import { existsSync, rmSync, writeFileSync } from "fs";
+import { homedir, hostname, platform, tmpdir } from "os";
+import { dirname, join } from "path";
+import { secureDirectory, secureFile } from "./private";
 
 export const CHROME_PROFILE_DIR = join(homedir(), ".snowball-cli", "chrome-profile");
 
@@ -165,36 +167,141 @@ async function cdpReady(cdpUrl: string): Promise<boolean> {
   }
 }
 
+/** Xvfb argv. No `-ac`: clients must present the MIT-MAGIC-COOKIE in `-auth`. */
+export function xvfbArgs(display: string, authFile: string): string[] {
+  return [display, "-screen", "0", "1280x800x24", "-nolisten", "tcp", "-auth", authFile];
+}
+
+function u16be(n: number): Buffer {
+  const buf = Buffer.alloc(2);
+  buf.writeUInt16BE(n);
+  return buf;
+}
+
+/** One Xauthority record. FamilyLocal (256) + hostname, display number, cookie. */
+function xauthRecord(host: string, displayNumber: string, cookie: Buffer): Buffer {
+  const address = Buffer.from(host);
+  const number = Buffer.from(displayNumber);
+  const name = Buffer.from("MIT-MAGIC-COOKIE-1");
+  return Buffer.concat([
+    u16be(256),
+    u16be(address.length),
+    address,
+    u16be(number.length),
+    number,
+    u16be(name.length),
+    name,
+    u16be(cookie.length),
+    cookie,
+  ]);
+}
+
+/** Authority file both Xvfb (`-auth`) and Chrome (`XAUTHORITY`) read. */
+export function buildXauthority(display: string): Buffer {
+  const displayNumber = display.replace(/^:/, "");
+  const cookie = randomBytes(16);
+  const records = [xauthRecord(hostname() || "localhost", displayNumber, cookie)];
+  if ((hostname() || "") !== "localhost") {
+    records.push(xauthRecord("localhost", displayNumber, cookie));
+  }
+  return Buffer.concat(records);
+}
+
+interface StartedXvfb {
+  child: ChildProcess;
+  authFile: string;
+  display: string;
+}
+
+let startedXvfb: StartedXvfb | null = null;
+let xvfbHookInstalled = false;
+
+function installXvfbStopHook(): void {
+  if (xvfbHookInstalled) return;
+  xvfbHookInstalled = true;
+  const halt = (code: number) => {
+    stopStartedXvfb();
+    process.exit(code);
+  };
+  process.on("exit", () => stopStartedXvfb());
+  process.once("SIGINT", () => halt(130));
+  process.once("SIGTERM", () => halt(143));
+}
+
+/** Stop only the Xvfb this process started. Safe to call more than once. */
+export function stopStartedXvfb(): void {
+  const started = startedXvfb;
+  startedXvfb = null;
+  if (!started) return;
+  const pid = started.child.pid;
+  if (pid) {
+    try {
+      // detached: true makes this pid a process-group leader.
+      process.kill(-pid, "SIGTERM");
+    } catch {
+      try { started.child.kill("SIGTERM"); } catch { /* already gone */ }
+    }
+  }
+  rmSync(started.authFile, { force: true });
+}
+
+export interface XvfbSession {
+  display: string;
+  authFile: string;
+}
+
 /**
- * Start Xvfb on a free display. The process is detached so it outlives the
- * login command (Chrome keeps using it). Returns the DISPLAY value, e.g. ":99".
+ * Start Xvfb on a free display. The caller must {@link stopStartedXvfb} when
+ * login finishes or fails — this server is not left running.
  */
-export async function startXvfb(): Promise<string | null> {
+export async function startXvfb(): Promise<XvfbSession | null> {
   if (!commandExists("Xvfb")) return null;
+  installXvfbStopHook();
 
   for (let n = 99; n <= 109; n++) {
     const display = `:${n}`;
     const sock = `/tmp/.X11-unix/X${n}`;
     if (existsSync(sock)) continue;
 
-    const child = spawn(
-      "Xvfb",
-      [display, "-screen", "0", "1280x800x24", "-ac", "-nolisten", "tcp"],
-      { stdio: "ignore", detached: true },
-    );
+    const authFile = join(tmpdir(), `snowball-xvfb-${process.pid}-${n}.xauth`);
+    writeFileSync(authFile, buildXauthority(display), { mode: 0o600 });
+    secureFile(authFile);
+
+    const child = spawn("Xvfb", xvfbArgs(display, authFile), {
+      stdio: "ignore",
+      detached: true,
+    });
     child.unref();
 
+    let ready = false;
     for (let i = 0; i < 20; i++) {
-      if (existsSync(sock)) return display;
+      if (existsSync(sock)) { ready = true; break; }
+      if (child.exitCode !== null) break;
       await sleep(100);
     }
+    if (!ready) {
+      if (child.pid) {
+        try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch { /* ignore */ } }
+      }
+      rmSync(authFile, { force: true });
+      continue;
+    }
+
+    startedXvfb = { child, authFile, display };
+    return { display, authFile };
   }
   return null;
 }
 
-function spawnChrome(bin: string, args: string[], display?: string): { stderr: () => string } {
+function spawnChrome(
+  bin: string,
+  args: string[],
+  display?: string,
+  xauthority?: string,
+): { stderr: () => string } {
   const env = { ...process.env };
   if (display) env.DISPLAY = display;
+  if (xauthority) env.XAUTHORITY = xauthority;
   let stderrText = "";
   const child = spawn(bin, args, {
     stdio: ["ignore", "ignore", "pipe"],
@@ -215,10 +322,12 @@ function spawnChrome(bin: string, args: string[], display?: string): { stderr: (
  * Reuses an existing debug port. Otherwise launches Chrome with a dedicated profile.
  */
 export async function ensureChrome(cdpUrl: string, chromePath?: string): Promise<void> {
+  secureDirectory(dirname(CHROME_PROFILE_DIR));
+  if (existsSync(CHROME_PROFILE_DIR)) secureDirectory(CHROME_PROFILE_DIR);
   if (await cdpReady(cdpUrl)) return;
 
   const profileDir = CHROME_PROFILE_DIR;
-  mkdirSync(profileDir, { recursive: true });
+  secureDirectory(profileDir);
 
   const bin = findChrome(chromePath);
   const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
@@ -231,10 +340,10 @@ export async function ensureChrome(cdpUrl: string, chromePath?: string): Promise
     port: debugPort(cdpUrl),
   });
 
-  let display: string | undefined;
+  let session: XvfbSession | null = null;
   if (plan.mode === "xvfb") {
-    display = (await startXvfb()) ?? undefined;
-    if (!display) {
+    session = await startXvfb();
+    if (!session) {
       plan.args.push("--headless=new");
       plan.headless = true;
       plan.mode = "headless";
@@ -246,7 +355,7 @@ export async function ensureChrome(cdpUrl: string, chromePath?: string): Promise
     console.log("  Xueqiu's WAF blocks headless Chrome, so login will probably fail.");
     console.log("  Install Xvfb (`apt install -y xvfb`) or import a token from another machine.\n");
   } else if (plan.mode === "xvfb") {
-    console.log(`  Starting Chrome on virtual display ${display} (Xvfb).`);
+    console.log(`  Starting Chrome on virtual display ${session?.display} (Xvfb).`);
     console.log("  Headless Chrome cannot get Xueqiu WAF cookies; this is a real browser window.\n");
   } else {
     console.log("  Starting Chrome...");
@@ -260,7 +369,7 @@ export async function ensureChrome(cdpUrl: string, chromePath?: string): Promise
     await sleep(attempt === 1 ? 200 : 500);
     clearStaleChromeLocks(profileDir);
 
-    const child = spawnChrome(bin, plan.args, display);
+    const child = spawnChrome(bin, plan.args, session?.display, session?.authFile);
     for (let i = 0; i < 20; i++) {
       await sleep(500);
       if (await cdpReady(cdpUrl)) return;
@@ -268,6 +377,7 @@ export async function ensureChrome(cdpUrl: string, chromePath?: string): Promise
     lastStderr = child.stderr();
   }
 
+  stopStartedXvfb();
   const tail = lastStderr.trim() ? `\n${lastStderr.trim()}\n` : "";
   throw new Error(
     `Chrome failed to start.${tail}` +

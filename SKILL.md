@@ -27,7 +27,7 @@ snowball fund 110011 --growth        # 基金收益
 
 ## 安装
 
-如果 `snowball` 命令不存在，提示用户安装 **Bun** 后再装 CLI。`snowball` 的 shebang 是 `#!/usr/bin/env bun`，用 Node 跑会在登录时崩（`console is not async iterable`）。
+如果 `snowball` 命令不存在，提示用户安装 **Bun** 后再装 CLI。从 0.3.2 起这是不兼容变更：`snowball` 的 shebang 是 `#!/usr/bin/env bun`，构建目标也是 Bun，不能用 Node 跑（`console is not async iterable`）。
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
@@ -46,7 +46,7 @@ bun add -g snowball-cli
 snowball login --qr-png /tmp/xueqiu-qr.png
 ```
 
-命令会打印 `QR_PNG=/tmp/xueqiu-qr.png`，然后一直阻塞到用户扫码并在 App 里点「确认登录」。把这个 PNG 发到用户的手机聊天里，告诉对方用雪球 App 扫一扫并确认。stdin 不是 TTY 时不要按回车，命令自己结束。
+命令会打印 `QR_PNG=/tmp/xueqiu-qr.png`，然后一直阻塞到用户扫码并在 App 里点「确认登录」（默认最多 10 分钟，可用 `--timeout <秒>` 改）。把这个 PNG 发到用户的手机聊天里，告诉对方用雪球 App 扫一扫并确认。二维码过期或大约 2 分钟没人确认时，CLI 会覆盖同一个文件并**再打印一行 `QR_PNG=`**，需要把新图再发一次。stdin 不是 TTY 时不要按回车，命令自己结束。
 
 没有图形界面时，CLI 会用 Xvfb 启动真实 Chrome（无头模式过不了雪球 WAF）。Chrome 起不来时，CLI 已默认加 `--no-sandbox` 并清理 `~/.snowball-cli/chrome-profile` 里的 `Singleton*` 锁。仍失败就装 `xvfb` 和 Chrome/Chromium，或改用下面的导入方式。
 

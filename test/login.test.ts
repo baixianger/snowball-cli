@@ -1,20 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
   clearStaleChromeLocks,
   debugPort,
   planChromeLaunch,
+  xvfbArgs,
 } from "../lib/browser";
+import { secureDirectory, secureFile } from "../lib/private";
 import {
+  assertXueqiuRedirect,
   cookiePairsFromSetCookie,
+  DEFAULT_LOGIN_TIMEOUT_MS,
   fetchXueqiu,
   hasLoginCookie,
   interpretQRState,
+  isXueqiuHostname,
   mergeCookies,
+  parseLoginTimeoutMs,
   qrGenerateUrl,
   qrPollUrl,
+  shouldRefreshQr,
   writeQRPng,
 } from "../lib/qr-terminal";
 
@@ -54,39 +61,75 @@ describe("QR API host", () => {
     }
   });
 
-  test("replayed redirects keep the Cookie header", async () => {
-    let port = 0;
+  test("isXueqiuHostname is the registrable domain and its subdomains", () => {
+    expect(isXueqiuHostname("xueqiu.com")).toBe(true);
+    expect(isXueqiuHostname("www.xueqiu.com")).toBe(true);
+    expect(isXueqiuHostname("stock.xueqiu.com")).toBe(true);
+    expect(isXueqiuHostname("WWW.XUEQIU.COM.")).toBe(true);
+    expect(isXueqiuHostname("xueqiu.com.evil.com")).toBe(false);
+    expect(isXueqiuHostname("notxueqiu.com")).toBe(false);
+    expect(isXueqiuHostname("evil.com")).toBe(false);
+    expect(isXueqiuHostname("127.0.0.1")).toBe(false);
+  });
+
+  test("cookie-bearing redirects may stay on https xueqiu and nowhere else", () => {
+    const apex = "https://xueqiu.com/snb/provider/query-qr-code-state?code=abc";
+    expect(assertXueqiuRedirect(apex, "https://www.xueqiu.com/snb/provider/query-qr-code-state?code=abc"))
+      .toBe("https://www.xueqiu.com/snb/provider/query-qr-code-state?code=abc");
+    expect(() => assertXueqiuRedirect("https://www.xueqiu.com/a", "https://evil.example/steal")).toThrow(/evil\.example/);
+    expect(() => assertXueqiuRedirect("https://www.xueqiu.com/a", "http://www.xueqiu.com/a")).toThrow(/http:/);
+    expect(() => assertXueqiuRedirect("https://www.xueqiu.com/a", "https://xueqiu.com.evil.com/a")).toThrow(/xueqiu\.com\.evil\.com/);
+  });
+
+  test("does not follow a redirect off xueqiu.com or send the cookie there", async () => {
+    let leaked: string | null = null;
+    let hits = 0;
+    const evil = Bun.serve({
+      port: 0,
+      fetch(req) {
+        hits++;
+        leaked = req.headers.get("cookie");
+        return new Response("nope");
+      },
+    });
     const server = Bun.serve({
       port: 0,
-      fetch(req): Response {
-        const url = new URL(req.url);
-        if (url.pathname === "/apex") {
-          return new Response("moved", {
-            status: 301,
-            headers: { Location: `http://127.0.0.1:${port}/www${url.search}` },
-          });
-        }
-        return Response.json({
-          cookie: req.headers.get("cookie"),
-          path: url.pathname,
+      fetch() {
+        return new Response("moved", {
+          status: 302,
+          headers: { Location: `http://127.0.0.1:${evil.port}/steal` },
         });
       },
     });
-    port = server.port ?? 0;
-
     try {
-      const { response, cookie } = await fetchXueqiu(
-        `http://127.0.0.1:${server.port}/apex?code=abc`,
-        "device_id=dev; xq_a_token=guest",
-      );
-      expect(response.status).toBe(200);
-      const body = await response.json();
-      expect(body.path).toBe("/www");
-      expect(body.cookie).toBe("device_id=dev; xq_a_token=guest");
-      expect(cookie).toContain("device_id=dev");
+      await expect(fetchXueqiu(
+        `http://127.0.0.1:${server.port}/qr`,
+        "xq_a_token=secret",
+      )).rejects.toThrow(/127\.0\.0\.1/);
+      expect(hits).toBe(0);
+      expect(leaked).toBeNull();
     } finally {
       server.stop(true);
+      evil.stop(true);
     }
+  });
+});
+
+describe("login wait", () => {
+  test("default timeout is 10 minutes and --timeout is seconds", () => {
+    expect(DEFAULT_LOGIN_TIMEOUT_MS).toBe(600_000);
+    expect(parseLoginTimeoutMs(undefined)).toBe(600_000);
+    expect(parseLoginTimeoutMs("90")).toBe(90_000);
+    expect(parseLoginTimeoutMs("0.5")).toBe(500);
+    expect(() => parseLoginTimeoutMs("0")).toThrow(/--timeout/);
+    expect(() => parseLoginTimeoutMs("-1")).toThrow(/--timeout/);
+    expect(() => parseLoginTimeoutMs("10m")).toThrow(/--timeout/);
+  });
+
+  test("a local poll timeout refreshes the QR the same way an expiry does", () => {
+    expect(shouldRefreshQr("EXPIRED")).toBe(true);
+    expect(shouldRefreshQr("TIMEOUT")).toBe(true);
+    expect(shouldRefreshQr("xq_a_token=a; u=1; xq_is_login=1")).toBe(false);
   });
 });
 
@@ -122,6 +165,22 @@ describe("login cookies", () => {
       "xq_a_token=abc; Path=/; Domain=.xueqiu.com; HttpOnly",
       "xq_is_login=1; Path=/",
     ])).toBe("xq_a_token=abc; xq_is_login=1");
+  });
+});
+
+describe("private files", () => {
+  test("existing directories become 0700 and secret files 0600", () => {
+    if (process.platform === "win32") return;
+    const dir = join(tmpdir(), `snowball-mode-${process.pid}`);
+    const file = join(dir, "token.json");
+    mkdirSync(dir, { recursive: true, mode: 0o755 });
+    writeFileSync(file, "secret", { mode: 0o644 });
+    chmodSync(dir, 0o755);
+    secureDirectory(dir);
+    secureFile(file);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -183,6 +242,15 @@ describe("Chrome launch plan", () => {
     });
     expect(plan.mode).toBe("headed");
     expect(plan.args).not.toContain("--no-sandbox");
+  });
+
+  test("Xvfb does not disable access control", () => {
+    const args = xvfbArgs(":99", "/tmp/snowball.xauth");
+    expect(args).not.toContain("-ac");
+    expect(args).toContain("-auth");
+    expect(args).toContain("/tmp/snowball.xauth");
+    expect(args).toContain("-nolisten");
+    expect(args).toContain("tcp");
   });
 
   test("debug port comes from the CDP url", () => {

@@ -118,10 +118,34 @@ export function cookiePairsFromSetCookie(setCookies: string[]): string {
     .join("; ");
 }
 
+/** xueqiu.com and any subdomain. A suffix like xueqiu.com.evil.com does not match. */
+export function isXueqiuHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return host === "xueqiu.com" || host.endsWith(".xueqiu.com");
+}
+
+/**
+ * Redirects are replayed with the cookie jar. Only https://*.xueqiu.com is
+ * allowed — an open redirect must not receive xq_a_token.
+ */
+export function assertXueqiuRedirect(currentUrl: string, location: string): string {
+  let next: URL;
+  try {
+    next = new URL(location, currentUrl);
+  } catch {
+    throw new Error(`Refusing to follow invalid redirect: ${location}`);
+  }
+  if (next.protocol !== "https:" || !isXueqiuHostname(next.hostname)) {
+    throw new Error(`Refusing to follow redirect to ${next.origin} with Xueqiu cookies`);
+  }
+  return next.toString();
+}
+
 /**
  * fetch() will not replay a manually set Cookie header across redirects.
  * Xueqiu 301s the apex host to www and the follow-up is an anonymous 400,
- * so redirects are replayed here with the cookie jar intact.
+ * so redirects are replayed here with the cookie jar intact — but only when
+ * the next hop is still on xueqiu.com.
  */
 export async function fetchXueqiu(
   url: string,
@@ -142,12 +166,37 @@ export async function fetchXueqiu(
   if (response.status >= 300 && response.status < 400 && redirects < 5) {
     const location = response.headers.get("location");
     if (location) {
+      const next = assertXueqiuRedirect(url, location);
       await response.arrayBuffer().catch(() => {});
-      return fetchXueqiu(new URL(location, url).toString(), nextCookie, init, redirects + 1);
+      return fetchXueqiu(next, nextCookie, init, redirects + 1);
     }
   }
 
   return { response, cookie: nextCookie };
+}
+
+/** Default `snowball login --timeout` (seconds): long enough to notice a PNG in chat. */
+export const DEFAULT_LOGIN_TIMEOUT_SEC = 600;
+export const DEFAULT_LOGIN_TIMEOUT_MS = DEFAULT_LOGIN_TIMEOUT_SEC * 1000;
+/** Poll one QR this long, then replace it. The server may expire it sooner (status 4). */
+export const QR_REFRESH_MS = 120_000;
+
+/** `--timeout` is seconds. Omitted means {@link DEFAULT_LOGIN_TIMEOUT_MS}. */
+export function parseLoginTimeoutMs(raw: string | undefined): number {
+  if (raw === undefined || raw === "") return DEFAULT_LOGIN_TIMEOUT_MS;
+  if (!/^\d+(\.\d+)?$/.test(raw.trim())) {
+    throw new Error("--timeout expects seconds, for example --timeout 600 (default 600)");
+  }
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error("--timeout expects a positive number of seconds (default 600)");
+  }
+  return Math.round(seconds * 1000);
+}
+
+/** Local poll window ended, or Xueqiu said the code expired: mint another QR. */
+export function shouldRefreshQr(result: string): boolean {
+  return result === "EXPIRED" || result === "TIMEOUT";
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -317,15 +366,15 @@ async function cookiesFromConfirm(cookie: string, payload: any, cdpUrl: string):
 }
 
 /**
- * Poll QR scan status until the user confirms login.
- * Returns the full cookie string including xq_is_login on success,
- * or the sentinel "EXPIRED" when the code should be regenerated.
+ * Poll one QR until the user confirms, the server expires it, or `timeoutMs` elapses.
+ * Returns the cookie string on success, "EXPIRED" when Xueqiu reports status 4,
+ * or "TIMEOUT" when this code's window ended without a confirm (caller should mint a new QR).
  */
 export async function pollQRStatus(
   code: string,
   wafCookies: string,
   cdpUrl: string,
-  timeoutMs = 120000,
+  timeoutMs = QR_REFRESH_MS,
 ): Promise<string> {
   const startTime = Date.now();
   const pollInterval = 2500;
@@ -373,10 +422,12 @@ export async function pollQRStatus(
       process.stdout.write(decision.type === "scanned" ? "✓" : ".");
     }
 
-    await new Promise((r) => setTimeout(r, pollInterval));
+    const remaining = timeoutMs - (Date.now() - startTime);
+    if (remaining <= 0) break;
+    await new Promise((r) => setTimeout(r, Math.min(pollInterval, remaining)));
   }
 
-  throw new Error("Login timeout (2 min). QR code may have expired.");
+  return "TIMEOUT";
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -396,6 +447,8 @@ export interface QRLoginOptions {
    * Ignored when stdout is not a TTY (the PNG or the raw URL is printed instead).
    */
   drawTerminal?: boolean;
+  /** Whole login, including QR refreshes. Default 10 minutes. */
+  timeoutMs?: number;
 }
 
 async function presentQR(qrUrl: string, options: QRLoginOptions): Promise<void> {
@@ -440,37 +493,49 @@ export async function qrLogin(cdpUrl: string, options: QRLoginOptions = {}): Pro
   }
   console.log("\n  ✓ Got WAF cookies\n");
 
-  const MAX_QR_ATTEMPTS = 3;
-  for (let attempt = 1; attempt <= MAX_QR_ATTEMPTS; attempt++) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  let round = 0;
+
+  while (Date.now() < deadline) {
+    round++;
+    if (round > 1) {
+      console.log("\n  QR was not confirmed. Generating a new one.\n");
+    }
+
     console.log("  Generating QR code...");
     const generated = await generateQRCode(wafCookies);
     wafCookies = generated.cookie;
     console.log("  ✓ QR code ready\n");
 
-    if (options.qrPngPath) {
-      console.log("  Scan this image with the Xueqiu app, then tap 确认登录.");
-      console.log("  This command waits until that finishes. No need to press ENTER.\n");
-    } else if (process.stdout.isTTY) {
-      console.log("  ┌────────────────────────────────────┐");
-      console.log("  │  Scan this QR with the Xueqiu app  │");
-      console.log("  └────────────────────────────────────┘\n");
+    if (round === 1) {
+      const seconds = Math.round(timeoutMs / 1000);
+      if (options.qrPngPath) {
+        console.log("  Scan this image with the Xueqiu app, then tap 确认登录.");
+        console.log("  This command waits until that finishes. No need to press ENTER.");
+        console.log(`  The image is refreshed in place for ${seconds}s. Watch for a new QR_PNG= line.\n`);
+      } else if (process.stdout.isTTY) {
+        console.log("  ┌────────────────────────────────────┐");
+        console.log("  │  Scan this QR with the Xueqiu app  │");
+        console.log("  └────────────────────────────────────┘\n");
+      }
     }
+
     await presentQR(generated.qrUrl, options);
+
+    const slice = Math.min(QR_REFRESH_MS, deadline - Date.now());
+    if (slice <= 0) break;
 
     console.log("  Waiting for scan");
     process.stdout.write("  ");
-    const cookie = await pollQRStatus(generated.code, wafCookies, cdpUrl);
-
-    if (cookie === "EXPIRED") {
-      if (attempt < MAX_QR_ATTEMPTS) {
-        console.log(`\n  QR expired. Generating a new one... (${attempt}/${MAX_QR_ATTEMPTS})\n`);
-        continue;
-      }
-      throw new Error("QR code expired 3 times. Run snowball login again.");
-    }
+    const cookie = await pollQRStatus(generated.code, wafCookies, cdpUrl, slice);
+    if (shouldRefreshQr(cookie)) continue;
 
     return { cookie, code: generated.code };
   }
 
-  throw new Error("QR login failed after retries");
+  const minutes = Math.max(1, Math.round(timeoutMs / 60000));
+  throw new Error(
+    `Login timed out after ${minutes} min. The QR was refreshed until then. Run snowball login again.`,
+  );
 }
