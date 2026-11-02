@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- `snowball search` and the other calls that used `https://xueqiu.com` now use `https://www.xueqiu.com`. A GET on the apex host is a 301, and `fetch` drops `Cookie` on that redirect, so the JSON body had no `data` and the CLI printed `undefined`. A missing `data` field or a non-JSON body now throws instead of returning `undefined`.
 - QR status polling calls `https://www.xueqiu.com`. A GET on the apex host is a 301, and `fetch` drops `Cookie` on that redirect, which came back as HTTP 400 before anyone scanned.
 - Cookie-bearing redirects are followed only to `https://xueqiu.com` and `https://*.xueqiu.com`.
 - Linux login starts a real Chrome window (`--no-sandbox`, stale `Singleton*` locks removed). Headless Chrome cannot pass Xueqiu's WAF. With no `DISPLAY`, Xvfb is started without `-ac` (MIT-MAGIC-COOKIE auth) and stopped when login finishes or fails.
