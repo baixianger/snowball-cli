@@ -79,6 +79,28 @@ describe("QR API host", () => {
     expect(() => assertXueqiuRedirect("https://www.xueqiu.com/a", "https://evil.example/steal")).toThrow(/evil\.example/);
     expect(() => assertXueqiuRedirect("https://www.xueqiu.com/a", "http://www.xueqiu.com/a")).toThrow(/http:/);
     expect(() => assertXueqiuRedirect("https://www.xueqiu.com/a", "https://xueqiu.com.evil.com/a")).toThrow(/xueqiu\.com\.evil\.com/);
+    let leaked = "";
+    try {
+      assertXueqiuRedirect(
+        "https://www.xueqiu.com/a",
+        "https://evil.example/steal?access_token=secret-token&u=12345&session_token=sess-value&uuid=abc-uuid",
+      );
+    } catch (err) {
+      leaked = err instanceof Error ? err.message : String(err);
+    }
+    expect(leaked).toMatch(/evil\.example/);
+    expect(leaked.includes("secret-token")).toBe(false);
+    expect(leaked.includes("12345")).toBe(false);
+    expect(leaked.includes("sess-value")).toBe(false);
+    expect(leaked.includes("abc-uuid")).toBe(false);
+    expect(leaked.includes("access_token")).toBe(false);
+    try {
+      assertXueqiuRedirect("https://www.xueqiu.com/a", "http://[/?access_token=secret-token&u=12345");
+    } catch (err) {
+      leaked = err instanceof Error ? err.message : String(err);
+    }
+    expect(leaked.includes("secret-token")).toBe(false);
+    expect(leaked.includes("12345")).toBe(false);
   });
 
   test("does not follow a redirect off xueqiu.com or send the cookie there", async () => {

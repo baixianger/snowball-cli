@@ -8,55 +8,215 @@
  */
 
 import { getCookie } from "./auth";
+import { redactSensitiveText, redactUrl } from "./redact";
+import {
+  cookiePairsFromSetCookie,
+  isXueqiuHostname,
+  mergeCookies,
+  readSetCookie,
+} from "./qr-terminal";
 
 const STOCK_URL = "https://stock.xueqiu.com";
-const XUEQIU_URL = "https://xueqiu.com";
+/**
+ * www, not the apex. GET https://xueqiu.com is a 301 to www, and fetch drops
+ * the Cookie header on that redirect, so the first hop is www directly.
+ * Same-site 302s (search-user: /users/search.json → /query/v1/old/search/user)
+ * are followed below with Cookie replayed. The Location query can contain
+ * access_token and the user id, so errors keep only origin and path.
+ */
+export const XUEQIU_URL = "https://www.xueqiu.com";
 const DANJUAN_URL = "https://danjuanapp.com";
+/** search-user is one 302, sometimes plus an apex→www 301. Three is enough. */
+export const MAX_API_REDIRECTS = 3;
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   "Accept": "application/json",
-  "Origin": "https://xueqiu.com",
-  "Referer": "https://xueqiu.com/",
+  "Origin": XUEQIU_URL,
+  "Referer": `${XUEQIU_URL}/`,
   "X-Requested-With": "XMLHttpRequest",
 };
 
-async function request(path: string, params: Record<string, string | number> = {}, base = STOCK_URL): Promise<any> {
-  const cookie = getCookie();
+/** Parse a Xueqiu body. HTML or other non-JSON becomes an error, not `undefined`. */
+export function parseApiBody(text: string, path: string): any {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Xueqiu returned a non-JSON response for ${path}`);
+  }
+  if (data == null || typeof data !== "object") {
+    throw new Error(`Xueqiu returned a non-JSON response for ${path}`);
+  }
+  const record = data as Record<string, unknown>;
+  if (record.error_code) {
+    const description = record.error_description
+      ? `: ${redactSensitiveText(String(record.error_description))}`
+      : "";
+    throw new Error(`API error ${record.error_code}${description}`);
+  }
+  return data;
+}
+
+/** Helpers that print `body.data` must fail when that field is missing. */
+export function requireData(body: any, path: string, field?: string): any {
+  if (body == null || typeof body !== "object" || body.data == null) {
+    throw new Error(`Xueqiu response for ${path} had no data`);
+  }
+  if (field === undefined) return body.data;
+  if (body.data[field] == null) {
+    throw new Error(`Xueqiu response for ${path} had no data`);
+  }
+  return body.data[field];
+}
+
+async function readResponse(res: Response, path: string): Promise<any> {
+  const text = await res.text();
+  if (!res.ok) {
+    const cleaned = redactSensitiveText(text.replace(/\s+/g, " ")).slice(0, 180);
+    throw new Error(`HTTP ${res.status} for ${path}: ${cleaned}`);
+  }
+  return parseApiBody(text, path);
+}
+
+/**
+ * Next hop for an API call. The returned URL keeps its query — search-user
+ * authenticates with access_token there — but callers must not log it.
+ *
+ * With a cookie, only https xueqiu.com / *.xueqiu.com is followed (a non-xueqiu
+ * start may stay on that same host). A cookieless xueqiu call stays on xueqiu.
+ * A cookieless call on any other host may follow https elsewhere, so
+ * danjuanapp.com can 301 to danjuanfunds.com.
+ */
+export function resolveApiRedirect(currentUrl: string, location: string, hasCookie = false): string {
+  let next: URL;
+  try {
+    next = new URL(location, currentUrl);
+  } catch {
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(location)}`);
+  }
+  let from: URL;
+  try {
+    from = new URL(currentUrl);
+  } catch {
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(currentUrl)}`);
+  }
+  const fromHost = from.hostname.toLowerCase().replace(/\.$/, "");
+  const nextHost = next.hostname.toLowerCase().replace(/\.$/, "");
+  const fromXueqiu = isXueqiuHostname(fromHost);
+  const nextXueqiu = isXueqiuHostname(nextHost);
+  const sameHost = fromHost === nextHost;
+  const cookieSafe = (fromXueqiu && nextXueqiu) || (!fromXueqiu && sameHost);
+  const allowed = next.protocol === "https:" && (hasCookie ? cookieSafe : (fromXueqiu ? nextXueqiu : true));
+  if (!allowed) {
+    throw new Error(`Refusing to follow redirect to ${next.origin}`);
+  }
+  return next.toString();
+}
+
+async function drain(res: Response): Promise<void> {
+  await res.arrayBuffer().catch(() => {});
+}
+
+/**
+ * `fetch` drops a manually set Cookie on redirect. Replay each hop ourselves:
+ * Cookie only on https xueqiu hosts, at most {@link MAX_API_REDIRECTS} hops.
+ */
+type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+export async function fetchApi(
+  url: string,
+  cookie: string | undefined,
+  headers: HeadersInit,
+  doFetch: ApiFetch = fetch,
+): Promise<Response> {
+  let current = url;
+  let jar = cookie ?? "";
+  for (let followed = 0; ; followed++) {
+    let host: string;
+    try {
+      host = new URL(current).hostname;
+    } catch {
+      throw new Error(`Refusing to request invalid URL: ${redactUrl(current)}`);
+    }
+    const reqHeaders = new Headers(headers);
+    if (jar && isXueqiuHostname(host)) reqHeaders.set("Cookie", jar);
+    else reqHeaders.delete("Cookie");
+
+    const response = await doFetch(current, { headers: reqHeaders, redirect: "manual" });
+    if (isXueqiuHostname(host)) {
+      const extra = cookiePairsFromSetCookie(readSetCookie(response));
+      if (extra) jar = jar ? mergeCookies(jar, extra) : extra;
+    }
+
+    if (response.status < 300 || response.status >= 400) return response;
+
+    const location = response.headers.get("location")?.trim();
+    if (!location || followed >= MAX_API_REDIRECTS) {
+      await drain(response);
+      let target = "";
+      if (location) {
+        try {
+          target = redactUrl(new URL(location, current).toString());
+        } catch {
+          target = redactUrl(location);
+        }
+      }
+      const where = target ? ` to ${target}` : "";
+      throw new Error(
+        `Xueqiu redirected ${redactUrl(current)} (${response.status}${where}). Stopped after ${MAX_API_REDIRECTS} hops.`,
+      );
+    }
+
+    let next: string;
+    try {
+      next = resolveApiRedirect(current, location, Boolean(jar));
+    } catch (err) {
+      await drain(response);
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(redactSensitiveText(message));
+    }
+    await drain(response);
+    current = next;
+  }
+}
+
+function withParams(path: string, params: Record<string, string | number>, base: string): string {
   const url = new URL(path, base);
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, String(v));
   }
+  return url.toString();
+}
 
-  const res = await fetch(url.toString(), {
-    headers: { ...HEADERS, Cookie: cookie },
-  });
+async function request(path: string, params: Record<string, string | number> = {}, base = STOCK_URL): Promise<any> {
+  const cookie = getCookie();
+  const res = await fetchApi(withParams(path, params, base), cookie, HEADERS);
+  return readResponse(res, path);
+}
 
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-  }
-
-  const data = await res.json();
-  if (data.error_code) {
-    throw new Error(`API error ${data.error_code}: ${data.error_description}`);
-  }
-
-  return data;
+async function requestData(
+  path: string,
+  params: Record<string, string | number> = {},
+  base = STOCK_URL,
+  field?: string,
+): Promise<any> {
+  return requireData(await request(path, params, base), path, field);
 }
 
 /** Request without token (for public endpoints like quotec) */
 async function requestPublic(path: string, params: Record<string, string | number> = {}, base = STOCK_URL): Promise<any> {
-  const url = new URL(path, base);
-  for (const [k, v] of Object.entries(params)) {
-    url.searchParams.set(k, String(v));
-  }
+  const res = await fetchApi(withParams(path, params, base), undefined, HEADERS);
+  return readResponse(res, path);
+}
 
-  const res = await fetch(url.toString(), {
-    headers: { ...HEADERS },
-  });
-
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+async function requestPublicData(
+  path: string,
+  params: Record<string, string | number> = {},
+  base = STOCK_URL,
+  field?: string,
+): Promise<any> {
+  return requireData(await requestPublic(path, params, base), path, field);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -66,32 +226,27 @@ async function requestPublic(path: string, params: Record<string, string | numbe
 /** Real-time quote (works WITHOUT token) */
 export async function quote(symbols: string | string[]): Promise<any> {
   const sym = Array.isArray(symbols) ? symbols.join(",") : symbols;
-  const data = await requestPublic("/v5/stock/realtime/quotec.json", { symbol: sym });
-  return data.data;
+  return requestPublicData("/v5/stock/realtime/quotec.json", { symbol: sym });
 }
 
 /** Detailed quote with PE, PB, dividend, 52w high/low */
 export async function quoteDetail(symbol: string): Promise<any> {
-  const data = await request("/v5/stock/quote.json", { symbol, extend: "detail" });
-  return data.data?.quote;
+  return requestData("/v5/stock/quote.json", { symbol, extend: "detail" }, STOCK_URL, "quote");
 }
 
 /** Batch quote for multiple symbols */
 export async function quoteBatch(symbols: string[]): Promise<any> {
-  const data = await request("/v5/stock/batch/quote.json", { symbol: symbols.join(",") });
-  return data.data;
+  return requestData("/v5/stock/batch/quote.json", { symbol: symbols.join(",") });
 }
 
 /** Order book (bid/ask levels) */
 export async function pankou(symbol: string): Promise<any> {
-  const data = await request("/v5/stock/realtime/pankou.json", { symbol });
-  return data.data;
+  return requestData("/v5/stock/realtime/pankou.json", { symbol });
 }
 
 /** Minute chart data */
 export async function minute(symbol: string): Promise<any> {
-  const data = await request("/v5/stock/chart/minute.json", { symbol, period: "1d" });
-  return data.data;
+  return requestData("/v5/stock/chart/minute.json", { symbol, period: "1d" });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -105,7 +260,7 @@ export async function kline(
   count: number = 120,
   type: "before" | "after" | "normal" = "before"
 ): Promise<any> {
-  const data = await request("/v5/stock/chart/kline.json", {
+  return requestData("/v5/stock/chart/kline.json", {
     symbol,
     period,
     type,
@@ -113,7 +268,6 @@ export async function kline(
     count: -count,
     indicator: "kline,pe,pb,ps,pcf,market_capital",
   });
-  return data.data;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -129,46 +283,41 @@ function detectRegion(symbol: string): "cn" | "hk" | "us" {
 /** Income statement */
 export async function income(symbol: string, type = "all", count = 5): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/finance/${region}/income.json`, {
+  return requestData(`/v5/stock/finance/${region}/income.json`, {
     symbol, type, is_detail: "true", count,
-  });
-  return data.data?.list;
+  }, STOCK_URL, "list");
 }
 
 /** Balance sheet */
 export async function balance(symbol: string, type = "all", count = 5): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/finance/${region}/balance.json`, {
+  return requestData(`/v5/stock/finance/${region}/balance.json`, {
     symbol, type, is_detail: "true", count,
-  });
-  return data.data?.list;
+  }, STOCK_URL, "list");
 }
 
 /** Cash flow statement */
 export async function cashflow(symbol: string, type = "all", count = 5): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/finance/${region}/cash_flow.json`, {
+  return requestData(`/v5/stock/finance/${region}/cash_flow.json`, {
     symbol, type, is_detail: "true", count,
-  });
-  return data.data?.list;
+  }, STOCK_URL, "list");
 }
 
 /** Key financial indicators */
 export async function indicator(symbol: string, type = "all", count = 5): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/finance/${region}/indicator.json`, {
+  return requestData(`/v5/stock/finance/${region}/indicator.json`, {
     symbol, type, is_detail: "true", count,
-  });
-  return data.data?.list;
+  }, STOCK_URL, "list");
 }
 
 /** Business revenue composition */
 export async function business(symbol: string): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/finance/${region}/business.json`, {
+  return requestData(`/v5/stock/finance/${region}/business.json`, {
     symbol, is_detail: "true", count: 5,
-  });
-  return data.data?.list;
+  }, STOCK_URL, "list");
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -177,32 +326,27 @@ export async function business(symbol: string): Promise<any> {
 
 /** Intraday capital flow */
 export async function capitalFlow(symbol: string): Promise<any> {
-  const data = await request("/v5/stock/capital/flow.json", { symbol });
-  return data.data;
+  return requestData("/v5/stock/capital/flow.json", { symbol });
 }
 
 /** Historical daily capital flow */
 export async function capitalHistory(symbol: string, count = 20): Promise<any> {
-  const data = await request("/v5/stock/capital/history.json", { symbol, count });
-  return data.data;
+  return requestData("/v5/stock/capital/history.json", { symbol, count });
 }
 
 /** Capital assortment by order size */
 export async function capitalAssort(symbol: string): Promise<any> {
-  const data = await request("/v5/stock/capital/assort.json", { symbol });
-  return data.data;
+  return requestData("/v5/stock/capital/assort.json", { symbol });
 }
 
 /** Margin trading data */
 export async function margin(symbol: string, page = 1, size = 20): Promise<any> {
-  const data = await request("/v5/stock/capital/margin.json", { symbol, page, size });
-  return data.data;
+  return requestData("/v5/stock/capital/margin.json", { symbol, page, size });
 }
 
 /** Block transactions */
 export async function blockTrans(symbol: string, page = 1, size = 20): Promise<any> {
-  const data = await request("/v5/stock/capital/blocktrans.json", { symbol, page, size });
-  return data.data;
+  return requestData("/v5/stock/capital/blocktrans.json", { symbol, page, size });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -212,43 +356,37 @@ export async function blockTrans(symbol: string, page = 1, size = 20): Promise<a
 /** Company profile */
 export async function company(symbol: string): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/company.json`, { symbol });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/company.json`, { symbol });
 }
 
 /** Top 10 shareholders */
 export async function topHolders(symbol: string, circula = 0): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/top_holders.json`, { symbol, circula });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/top_holders.json`, { symbol, circula });
 }
 
 /** Shareholder count history */
 export async function holders(symbol: string): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/holders.json`, { symbol });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/holders.json`, { symbol });
 }
 
 /** Dividends & bonuses */
 export async function bonus(symbol: string, page = 1, size = 20): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/bonus.json`, { symbol, page, size });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/bonus.json`, { symbol, page, size });
 }
 
 /** Industry classification */
 export async function industry(symbol: string): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/industry.json`, { symbol });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/industry.json`, { symbol });
 }
 
 /** Institutional holding changes */
 export async function orgHolding(symbol: string): Promise<any> {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/org_holding/change.json`, { symbol });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/org_holding/change.json`, { symbol });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -257,14 +395,12 @@ export async function orgHolding(symbol: string): Promise<any> {
 
 /** Earnings forecast */
 export async function forecast(symbol: string): Promise<any> {
-  const data = await request("/stock/report/earningforecast.json", { symbol });
-  return data.data;
+  return requestData("/stock/report/earningforecast.json", { symbol });
 }
 
 /** Latest research reports */
 export async function reports(symbol: string): Promise<any> {
-  const data = await request("/stock/report/latest.json", { symbol });
-  return data.data;
+  return requestData("/stock/report/latest.json", { symbol });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -273,17 +409,15 @@ export async function reports(symbol: string): Promise<any> {
 
 /** Search stocks by keyword */
 export async function search(query: string, count = 10): Promise<any> {
-  const data = await request("/query/v1/suggest_stock.json", { q: query, count }, XUEQIU_URL);
-  return data.data;
+  return requestData("/query/v1/suggest_stock.json", { q: query, count }, XUEQIU_URL);
 }
 
 /** Hot stocks list */
 export async function hotStocks(type: "global" | "us" | "cn" | "hk" = "cn", size = 10): Promise<any> {
   const typeMap = { global: 10, us: 11, cn: 12, hk: 13 };
-  const data = await request("/v5/stock/hot_stock/list.json", {
+  return requestData("/v5/stock/hot_stock/list.json", {
     type: typeMap[type], size,
   });
-  return data.data;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -328,10 +462,9 @@ export async function feed(category: string = "headlines", count = 20): Promise<
 
 /** Search posts/articles */
 export async function searchPosts(query: string, count = 10, sort: "time" | "reply" | "relevance" = "relevance"): Promise<any> {
-  const data = await request("/statuses/search.json", {
+  return requestData("/statuses/search.json", {
     q: query, count, page: 1, sort, source: "all",
   }, XUEQIU_URL);
-  return data.data;
 }
 
 function formatPost(post: any) {
@@ -347,7 +480,7 @@ function formatPost(post: any) {
     like_count: post.like_count ?? post.fav_count,
     retweet_count: post.retweet_count,
     created_at: post.created_at,
-    url: post.target ? `https://xueqiu.com${post.target}` : null,
+    url: post.target ? `${XUEQIU_URL}${post.target}` : null,
   };
 }
 
@@ -393,7 +526,7 @@ export async function stockKOLs(symbol: string, count = 10): Promise<any> {
     city: u.city,
     verified: u.verified,
     verified_description: u.verified_description,
-    url: `https://xueqiu.com/u/${u.id}`,
+    url: `${XUEQIU_URL}/u/${u.id}`,
   }));
 }
 
@@ -445,8 +578,7 @@ export async function postDetail(postId: string): Promise<any> {
 
 /** List user's watchlists */
 export async function watchlists(): Promise<any> {
-  const data = await request("/v5/stock/portfolio/list.json", { system: "true" });
-  return data.data;
+  return requestData("/v5/stock/portfolio/list.json", { system: "true" });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -460,11 +592,10 @@ export async function screen(
   page = 1,
   size = 30
 ): Promise<any> {
-  const data = await request("/stock/screener/screen.json", {
+  return requestData("/stock/screener/screen.json", {
     category: market, orderby, order: "desc", page, size,
     current: "ALL", pct: "ALL",
   }, XUEQIU_URL);
-  return data.data;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -473,18 +604,15 @@ export async function screen(
 
 /** Fund detail */
 export async function fund(code: string): Promise<any> {
-  const data = await requestPublic(`/djapi/fund/detail/${code}`, {}, DANJUAN_URL);
-  return data.data;
+  return requestPublicData(`/djapi/fund/detail/${code}`, {}, DANJUAN_URL);
 }
 
 /** Fund NAV history */
 export async function fundNav(code: string, page = 1, size = 30): Promise<any> {
-  const data = await requestPublic(`/djapi/fund/nav/history/${code}`, { page, size }, DANJUAN_URL);
-  return data.data;
+  return requestPublicData(`/djapi/fund/nav/history/${code}`, { page, size }, DANJUAN_URL);
 }
 
 /** Fund growth performance */
 export async function fundGrowth(code: string, period = "ty"): Promise<any> {
-  const data = await requestPublic(`/djapi/fund/growth/${code}`, { day: period }, DANJUAN_URL);
-  return data.data;
+  return requestPublicData(`/djapi/fund/growth/${code}`, { day: period }, DANJUAN_URL);
 }

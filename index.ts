@@ -24,6 +24,7 @@ import {
   type SmsCommandResult,
 } from "./lib/sms";
 import * as api from "./lib/api";
+import { redactSensitiveText } from "./lib/redact";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CDP_URL = process.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://127.0.0.1:9222";
@@ -220,7 +221,7 @@ const commands: Record<string, Record<string, Command>> = {
         try {
           timeoutMs = parseLoginTimeoutMs(timeoutRaw);
         } catch (e: any) {
-          console.error(`\n  ${e.message}\n`);
+          console.error(`\n  ${redactSensitiveText(String(e.message))}\n`);
           process.exit(1);
         }
 
@@ -279,9 +280,9 @@ const commands: Record<string, Record<string, Command>> = {
               } catch (e: any) {
                 // Agents and --qr-png must not block on ENTER. A TTY can still fall back.
                 if (qrPng || !process.stdin.isTTY) {
-                  throw new Error(`QR failed: ${e.message}`);
+                  throw new Error(`QR failed: ${redactSensitiveText(String(e.message))}`);
                 }
-                console.error(`\n  QR failed: ${e.message}\n  Falling back to manual...\n`);
+                console.error(`\n  QR failed: ${redactSensitiveText(String(e.message))}\n  Falling back to manual...\n`);
                 const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
                 saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
               }
@@ -594,7 +595,7 @@ for (const group of Object.values(commands)) {
     try {
       await group[MODE].run();
     } catch (e: any) {
-      console.error(`\n  Error: ${e.message}\n`);
+      console.error(`\n  Error: ${redactSensitiveText(String(e.message))}\n`);
       process.exit(1);
     }
     process.exit(0);

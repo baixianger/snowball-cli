@@ -7179,6 +7179,33 @@ var $toFile = function toFile(path, text, opts, cb) {
   return render(renderToFile, text, params);
 };
 
+// lib/redact.ts
+var SENSITIVE_PARAM = /\b(?:access_token|session_token|uuid)=[^&#\s"'<>]*/gi;
+var USER_PARAM = /([?&])u=[^&#\s"'<>]*/g;
+var URL_IN_TEXT = /https?:\/\/[^\s"'<>]*/g;
+function redactUrl(raw) {
+  const input = raw.trim();
+  if (!input)
+    return input;
+  try {
+    const url = new URL(input);
+    const hidden = url.search !== "" || url.hash !== "";
+    url.search = "";
+    url.hash = "";
+    const shown = url.toString();
+    return hidden ? `${shown}?\u2026` : shown;
+  } catch {
+    return input.replace(/[?#].*/, "?\u2026");
+  }
+}
+function redactSensitiveText(text) {
+  const withoutUrls = text.replace(URL_IN_TEXT, (match) => {
+    const trimmed = match.replace(/[),.;]+$/, "");
+    return redactUrl(trimmed) + match.slice(trimmed.length);
+  });
+  return withoutUrls.replace(SENSITIVE_PARAM, (match) => `${match.slice(0, match.indexOf("="))}=\u2026`).replace(USER_PARAM, "$1u=\u2026");
+}
+
 // lib/qr-terminal.ts
 var XUEQIU_ORIGIN = "https://www.xueqiu.com";
 var HEADERS = {
@@ -7256,7 +7283,7 @@ function assertXueqiuRedirect(currentUrl, location) {
   try {
     next = new URL(location, currentUrl);
   } catch {
-    throw new Error(`Refusing to follow invalid redirect: ${location}`);
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(location)}`);
   }
   if (next.protocol !== "https:" || !isXueqiuHostname(next.hostname)) {
     throw new Error(`Refusing to follow redirect to ${next.origin} with Xueqiu cookies`);
@@ -7357,17 +7384,17 @@ async function getWafCookies(cdpUrl) {
 async function generateQRCode(wafCookies) {
   const { response, cookie } = await fetchXueqiu(qrGenerateUrl(), wafCookies, { method: "POST" });
   if (!response.ok) {
-    const detail = (await response.text()).slice(0, 180);
+    const detail = redactSensitiveText(await response.text()).slice(0, 180);
     throw new Error(`QR generate failed: HTTP ${response.status} ${detail}`);
   }
   const data = await response.json();
   if (!data.success || !data.data?.qr_code) {
-    throw new Error(`QR generate failed: ${data.message || JSON.stringify(data)}`);
+    throw new Error(`QR generate failed: ${redactSensitiveText(String(data.message || JSON.stringify(data)))}`);
   }
   const qrUrl = data.data.qr_code;
   const codeMatch = qrUrl.match(/code=([a-f0-9]+)/i);
   if (!codeMatch) {
-    throw new Error(`Could not parse QR code from URL: ${qrUrl}`);
+    throw new Error(`Could not parse QR code from URL: ${redactUrl(String(qrUrl))}`);
   }
   return { qrUrl, code: codeMatch[1], cookie };
 }
@@ -7424,7 +7451,7 @@ async function pollQRStatus(code, wafCookies, cdpUrl, timeoutMs = QR_REFRESH_MS)
     cookie = result.cookie;
     const res = result.response;
     if (!res.ok) {
-      const detail = (await res.text()).slice(0, 180);
+      const detail = redactSensitiveText(await res.text()).slice(0, 180);
       throw new Error(`Poll failed: HTTP ${res.status} ${detail}`);
     }
     const data = await res.json();
@@ -7441,7 +7468,7 @@ async function pollQRStatus(code, wafCookies, cdpUrl, timeoutMs = QR_REFRESH_MS)
     if (decision.type === "expired")
       return "EXPIRED";
     if (decision.type === "invalid") {
-      throw new Error(`Unexpected QR status: ${JSON.stringify(data).slice(0, 180)}`);
+      throw new Error(`Unexpected QR status: ${redactSensitiveText(JSON.stringify(data)).slice(0, 180)}`);
     }
     if (decision.type === "scanned" && !announcedScan) {
       announcedScan = true;
@@ -9068,64 +9095,166 @@ async function completeSavedLogin(dataDir, rawCode, fetchImpl = fetchXueqiu) {
 // lib/api.ts
 init_auth();
 var STOCK_URL = "https://stock.xueqiu.com";
-var XUEQIU_URL = "https://xueqiu.com";
+var XUEQIU_URL = "https://www.xueqiu.com";
 var DANJUAN_URL = "https://danjuanapp.com";
+var MAX_API_REDIRECTS = 3;
 var HEADERS2 = {
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   Accept: "application/json",
-  Origin: "https://xueqiu.com",
-  Referer: "https://xueqiu.com/",
+  Origin: XUEQIU_URL,
+  Referer: `${XUEQIU_URL}/`,
   "X-Requested-With": "XMLHttpRequest"
 };
-async function request(path, params = {}, base = STOCK_URL) {
-  const cookie = getCookie();
-  const url = new URL(path, base);
-  for (const [k, v] of Object.entries(params)) {
-    url.searchParams.set(k, String(v));
+function parseApiBody(text, path) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Xueqiu returned a non-JSON response for ${path}`);
   }
-  const res = await fetch(url.toString(), {
-    headers: { ...HEADERS2, Cookie: cookie }
-  });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+  if (data == null || typeof data !== "object") {
+    throw new Error(`Xueqiu returned a non-JSON response for ${path}`);
   }
-  const data = await res.json();
-  if (data.error_code) {
-    throw new Error(`API error ${data.error_code}: ${data.error_description}`);
+  const record = data;
+  if (record.error_code) {
+    const description = record.error_description ? `: ${redactSensitiveText(String(record.error_description))}` : "";
+    throw new Error(`API error ${record.error_code}${description}`);
   }
   return data;
 }
-async function requestPublic(path, params = {}, base = STOCK_URL) {
+function requireData(body, path, field) {
+  if (body == null || typeof body !== "object" || body.data == null) {
+    throw new Error(`Xueqiu response for ${path} had no data`);
+  }
+  if (field === undefined)
+    return body.data;
+  if (body.data[field] == null) {
+    throw new Error(`Xueqiu response for ${path} had no data`);
+  }
+  return body.data[field];
+}
+async function readResponse(res, path) {
+  const text = await res.text();
+  if (!res.ok) {
+    const cleaned = redactSensitiveText(text.replace(/\s+/g, " ")).slice(0, 180);
+    throw new Error(`HTTP ${res.status} for ${path}: ${cleaned}`);
+  }
+  return parseApiBody(text, path);
+}
+function resolveApiRedirect(currentUrl, location, hasCookie = false) {
+  let next;
+  try {
+    next = new URL(location, currentUrl);
+  } catch {
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(location)}`);
+  }
+  let from;
+  try {
+    from = new URL(currentUrl);
+  } catch {
+    throw new Error(`Refusing to follow invalid redirect: ${redactUrl(currentUrl)}`);
+  }
+  const fromHost = from.hostname.toLowerCase().replace(/\.$/, "");
+  const nextHost = next.hostname.toLowerCase().replace(/\.$/, "");
+  const fromXueqiu = isXueqiuHostname(fromHost);
+  const nextXueqiu = isXueqiuHostname(nextHost);
+  const sameHost = fromHost === nextHost;
+  const cookieSafe = fromXueqiu && nextXueqiu || !fromXueqiu && sameHost;
+  const allowed = next.protocol === "https:" && (hasCookie ? cookieSafe : fromXueqiu ? nextXueqiu : true);
+  if (!allowed) {
+    throw new Error(`Refusing to follow redirect to ${next.origin}`);
+  }
+  return next.toString();
+}
+async function drain(res) {
+  await res.arrayBuffer().catch(() => {});
+}
+async function fetchApi(url, cookie, headers, doFetch = fetch) {
+  let current = url;
+  let jar = cookie ?? "";
+  for (let followed = 0;; followed++) {
+    let host;
+    try {
+      host = new URL(current).hostname;
+    } catch {
+      throw new Error(`Refusing to request invalid URL: ${redactUrl(current)}`);
+    }
+    const reqHeaders = new Headers(headers);
+    if (jar && isXueqiuHostname(host))
+      reqHeaders.set("Cookie", jar);
+    else
+      reqHeaders.delete("Cookie");
+    const response = await doFetch(current, { headers: reqHeaders, redirect: "manual" });
+    if (isXueqiuHostname(host)) {
+      const extra = cookiePairsFromSetCookie(readSetCookie(response));
+      if (extra)
+        jar = jar ? mergeCookies(jar, extra) : extra;
+    }
+    if (response.status < 300 || response.status >= 400)
+      return response;
+    const location = response.headers.get("location")?.trim();
+    if (!location || followed >= MAX_API_REDIRECTS) {
+      await drain(response);
+      let target = "";
+      if (location) {
+        try {
+          target = redactUrl(new URL(location, current).toString());
+        } catch {
+          target = redactUrl(location);
+        }
+      }
+      const where = target ? ` to ${target}` : "";
+      throw new Error(`Xueqiu redirected ${redactUrl(current)} (${response.status}${where}). Stopped after ${MAX_API_REDIRECTS} hops.`);
+    }
+    let next;
+    try {
+      next = resolveApiRedirect(current, location, Boolean(jar));
+    } catch (err) {
+      await drain(response);
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(redactSensitiveText(message));
+    }
+    await drain(response);
+    current = next;
+  }
+}
+function withParams(path, params, base) {
   const url = new URL(path, base);
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, String(v));
   }
-  const res = await fetch(url.toString(), {
-    headers: { ...HEADERS2 }
-  });
-  if (!res.ok)
-    throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  return url.toString();
+}
+async function request(path, params = {}, base = STOCK_URL) {
+  const cookie = getCookie();
+  const res = await fetchApi(withParams(path, params, base), cookie, HEADERS2);
+  return readResponse(res, path);
+}
+async function requestData(path, params = {}, base = STOCK_URL, field) {
+  return requireData(await request(path, params, base), path, field);
+}
+async function requestPublic(path, params = {}, base = STOCK_URL) {
+  const res = await fetchApi(withParams(path, params, base), undefined, HEADERS2);
+  return readResponse(res, path);
+}
+async function requestPublicData(path, params = {}, base = STOCK_URL, field) {
+  return requireData(await requestPublic(path, params, base), path, field);
 }
 async function quote(symbols) {
   const sym = Array.isArray(symbols) ? symbols.join(",") : symbols;
-  const data = await requestPublic("/v5/stock/realtime/quotec.json", { symbol: sym });
-  return data.data;
+  return requestPublicData("/v5/stock/realtime/quotec.json", { symbol: sym });
 }
 async function quoteDetail(symbol) {
-  const data = await request("/v5/stock/quote.json", { symbol, extend: "detail" });
-  return data.data?.quote;
+  return requestData("/v5/stock/quote.json", { symbol, extend: "detail" }, STOCK_URL, "quote");
 }
 async function pankou(symbol) {
-  const data = await request("/v5/stock/realtime/pankou.json", { symbol });
-  return data.data;
+  return requestData("/v5/stock/realtime/pankou.json", { symbol });
 }
 async function minute(symbol) {
-  const data = await request("/v5/stock/chart/minute.json", { symbol, period: "1d" });
-  return data.data;
+  return requestData("/v5/stock/chart/minute.json", { symbol, period: "1d" });
 }
 async function kline(symbol, period = "day", count = 120, type = "before") {
-  const data = await request("/v5/stock/chart/kline.json", {
+  return requestData("/v5/stock/chart/kline.json", {
     symbol,
     period,
     type,
@@ -9133,7 +9262,6 @@ async function kline(symbol, period = "day", count = 120, type = "before") {
     count: -count,
     indicator: "kline,pe,pb,ps,pcf,market_capital"
   });
-  return data.data;
 }
 function detectRegion(symbol) {
   if (symbol.startsWith("SH") || symbol.startsWith("SZ"))
@@ -9144,118 +9272,99 @@ function detectRegion(symbol) {
 }
 async function income(symbol, type = "all", count = 5) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/finance/${region}/income.json`, {
+  return requestData(`/v5/stock/finance/${region}/income.json`, {
     symbol,
     type,
     is_detail: "true",
     count
-  });
-  return data.data?.list;
+  }, STOCK_URL, "list");
 }
 async function balance(symbol, type = "all", count = 5) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/finance/${region}/balance.json`, {
+  return requestData(`/v5/stock/finance/${region}/balance.json`, {
     symbol,
     type,
     is_detail: "true",
     count
-  });
-  return data.data?.list;
+  }, STOCK_URL, "list");
 }
 async function cashflow(symbol, type = "all", count = 5) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/finance/${region}/cash_flow.json`, {
+  return requestData(`/v5/stock/finance/${region}/cash_flow.json`, {
     symbol,
     type,
     is_detail: "true",
     count
-  });
-  return data.data?.list;
+  }, STOCK_URL, "list");
 }
 async function indicator(symbol, type = "all", count = 5) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/finance/${region}/indicator.json`, {
+  return requestData(`/v5/stock/finance/${region}/indicator.json`, {
     symbol,
     type,
     is_detail: "true",
     count
-  });
-  return data.data?.list;
+  }, STOCK_URL, "list");
 }
 async function business(symbol) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/finance/${region}/business.json`, {
+  return requestData(`/v5/stock/finance/${region}/business.json`, {
     symbol,
     is_detail: "true",
     count: 5
-  });
-  return data.data?.list;
+  }, STOCK_URL, "list");
 }
 async function capitalFlow(symbol) {
-  const data = await request("/v5/stock/capital/flow.json", { symbol });
-  return data.data;
+  return requestData("/v5/stock/capital/flow.json", { symbol });
 }
 async function capitalHistory(symbol, count = 20) {
-  const data = await request("/v5/stock/capital/history.json", { symbol, count });
-  return data.data;
+  return requestData("/v5/stock/capital/history.json", { symbol, count });
 }
 async function capitalAssort(symbol) {
-  const data = await request("/v5/stock/capital/assort.json", { symbol });
-  return data.data;
+  return requestData("/v5/stock/capital/assort.json", { symbol });
 }
 async function margin(symbol, page = 1, size = 20) {
-  const data = await request("/v5/stock/capital/margin.json", { symbol, page, size });
-  return data.data;
+  return requestData("/v5/stock/capital/margin.json", { symbol, page, size });
 }
 async function blockTrans(symbol, page = 1, size = 20) {
-  const data = await request("/v5/stock/capital/blocktrans.json", { symbol, page, size });
-  return data.data;
+  return requestData("/v5/stock/capital/blocktrans.json", { symbol, page, size });
 }
 async function company(symbol) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/company.json`, { symbol });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/company.json`, { symbol });
 }
 async function topHolders(symbol, circula = 0) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/top_holders.json`, { symbol, circula });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/top_holders.json`, { symbol, circula });
 }
 async function holders(symbol) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/holders.json`, { symbol });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/holders.json`, { symbol });
 }
 async function bonus(symbol, page = 1, size = 20) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/bonus.json`, { symbol, page, size });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/bonus.json`, { symbol, page, size });
 }
 async function industry(symbol) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/industry.json`, { symbol });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/industry.json`, { symbol });
 }
 async function orgHolding(symbol) {
   const region = detectRegion(symbol);
-  const data = await request(`/v5/stock/f10/${region}/org_holding/change.json`, { symbol });
-  return data.data;
+  return requestData(`/v5/stock/f10/${region}/org_holding/change.json`, { symbol });
 }
 async function forecast(symbol) {
-  const data = await request("/stock/report/earningforecast.json", { symbol });
-  return data.data;
+  return requestData("/stock/report/earningforecast.json", { symbol });
 }
 async function search(query, count = 10) {
-  const data = await request("/query/v1/suggest_stock.json", { q: query, count }, XUEQIU_URL);
-  return data.data;
+  return requestData("/query/v1/suggest_stock.json", { q: query, count }, XUEQIU_URL);
 }
 async function hotStocks(type = "cn", size = 10) {
   const typeMap = { global: 10, us: 11, cn: 12, hk: 13 };
-  const data = await request("/v5/stock/hot_stock/list.json", {
+  return requestData("/v5/stock/hot_stock/list.json", {
     type: typeMap[type],
     size
   });
-  return data.data;
 }
 async function indices() {
   return quote([
@@ -9309,7 +9418,7 @@ function formatPost(post) {
     like_count: post.like_count ?? post.fav_count,
     retweet_count: post.retweet_count,
     created_at: post.created_at,
-    url: post.target ? `https://xueqiu.com${post.target}` : null
+    url: post.target ? `${XUEQIU_URL}${post.target}` : null
   };
 }
 async function hotPosts(scope = "day", count = 10, page = 1) {
@@ -9357,7 +9466,7 @@ async function stockKOLs(symbol, count = 10) {
     city: u.city,
     verified: u.verified,
     verified_description: u.verified_description,
-    url: `https://xueqiu.com/u/${u.id}`
+    url: `${XUEQIU_URL}/u/${u.id}`
   }));
 }
 async function userPosts(userId, count = 10, page = 1) {
@@ -9397,7 +9506,7 @@ async function postDetail(postId) {
   return data;
 }
 async function screen(market = "SH", orderby = "symbol", page = 1, size = 30) {
-  const data = await request("/stock/screener/screen.json", {
+  return requestData("/stock/screener/screen.json", {
     category: market,
     orderby,
     order: "desc",
@@ -9406,19 +9515,15 @@ async function screen(market = "SH", orderby = "symbol", page = 1, size = 30) {
     current: "ALL",
     pct: "ALL"
   }, XUEQIU_URL);
-  return data.data;
 }
 async function fund(code) {
-  const data = await requestPublic(`/djapi/fund/detail/${code}`, {}, DANJUAN_URL);
-  return data.data;
+  return requestPublicData(`/djapi/fund/detail/${code}`, {}, DANJUAN_URL);
 }
 async function fundNav(code, page = 1, size = 30) {
-  const data = await requestPublic(`/djapi/fund/nav/history/${code}`, { page, size }, DANJUAN_URL);
-  return data.data;
+  return requestPublicData(`/djapi/fund/nav/history/${code}`, { page, size }, DANJUAN_URL);
 }
 async function fundGrowth(code, period = "ty") {
-  const data = await requestPublic(`/djapi/fund/growth/${code}`, { day: period }, DANJUAN_URL);
-  return data.data;
+  return requestPublicData(`/djapi/fund/growth/${code}`, { day: period }, DANJUAN_URL);
 }
 
 // index.ts
@@ -9602,7 +9707,7 @@ var commands = {
           timeoutMs = parseLoginTimeoutMs(timeoutRaw);
         } catch (e) {
           console.error(`
-  ${e.message}
+  ${redactSensitiveText(String(e.message))}
 `);
           process.exit(1);
         }
@@ -9661,10 +9766,10 @@ var commands = {
                 saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
               } catch (e) {
                 if (qrPng || !process.stdin.isTTY) {
-                  throw new Error(`QR failed: ${e.message}`);
+                  throw new Error(`QR failed: ${redactSensitiveText(String(e.message))}`);
                 }
                 console.error(`
-  QR failed: ${e.message}
+  QR failed: ${redactSensitiveText(String(e.message))}
   Falling back to manual...
 `);
                 const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
@@ -9986,7 +10091,7 @@ for (const group of Object.values(commands)) {
       await group[MODE].run();
     } catch (e) {
       console.error(`
-  Error: ${e.message}
+  Error: ${redactSensitiveText(String(e.message))}
 `);
       process.exit(1);
     }
