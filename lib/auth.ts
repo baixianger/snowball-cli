@@ -26,7 +26,7 @@ ensureDataDir();
 export interface TokenData {
   cookie: string;
   extractedAt: string;
-  source: "chrome" | "chrome-qr" | "manual";
+  source: "chrome" | "chrome-qr" | "chrome-sms" | "manual";
 }
 
 /** Save token to disk (owner read/write only). */

@@ -17,3 +17,6 @@
 
 - `snowball login --qr-png <path>` writes a PNG and waits with no ENTER prompt.
 - `snowball login --timeout <seconds>` (default 600). When one QR expires or sits for about 2 minutes, it is regenerated — the same PNG is overwritten and `QR_PNG=` is printed again — until that deadline.
+- `snowball login --phone <number> [--area-code 86]` drives the www.xueqiu.com SMS login modal inside headed Chrome (Xvfb when there is no display). It prints `SMS_SENT=1`, or `CAPTCHA_REQUIRED=<png>` when GeeTest `available` is 1, and waits for the code until `--timeout`.
+- `snowball login --sms-code <code>` (separate process) writes `~/.snowball-cli/sms-login/code` mode `0600`. The waiting process also reads a code from stdin. `--captcha-click x,y` sends GeeTest clicks in screenshot pixels.
+- A wrong or expired SMS code prints `SMS_CODE_REJECTED=1` and can be submitted again before the timeout. Xueqiu error 20099 follows the web client and resubmits as registration. Success still requires `xq_is_login`, then prints `LOGIN_OK=1`. Phone numbers are logged masked (`138****8000`); codes and cookies are not logged.

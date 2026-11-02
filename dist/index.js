@@ -4263,8 +4263,8 @@ var require_browser = __commonJS(function(exports) {
 
 // index.ts
 init_auth();
-import { readFileSync as readFileSync2 } from "fs";
-import { join as join3, dirname as dirname3 } from "path";
+import { readFileSync as readFileSync3 } from "fs";
+import { join as join4, dirname as dirname3 } from "path";
 import { fileURLToPath } from "url";
 
 // lib/qr-terminal.ts
@@ -5074,6 +5074,847 @@ async function openXueqiuTab(cdpUrl) {
   });
 }
 
+// lib/sms.ts
+import { randomBytes as randomBytes2 } from "crypto";
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readdirSync, readFileSync as readFileSync2, renameSync, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "fs";
+import { join as join3 } from "path";
+
+// lib/cdp.ts
+function messageText(data) {
+  if (typeof data === "string")
+    return data;
+  if (data instanceof ArrayBuffer)
+    return new TextDecoder().decode(data);
+  if (ArrayBuffer.isView(data))
+    return new TextDecoder().decode(data);
+  return "";
+}
+async function connectCdp(webSocketDebuggerUrl) {
+  const ws = new WebSocket(webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("CDP connection timed out"));
+    }, 1e4);
+    ws.onopen = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    ws.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("CDP connection failed"));
+    };
+  });
+  let next = 1;
+  const pending = new Map;
+  const listeners = new Set;
+  ws.onmessage = (event) => {
+    let msg;
+    try {
+      msg = JSON.parse(messageText(event.data));
+    } catch {
+      return;
+    }
+    if (msg.id && pending.has(msg.id)) {
+      const waiter = pending.get(msg.id);
+      pending.delete(msg.id);
+      if (msg.error)
+        waiter.reject(new Error(msg.error.message || "CDP command failed"));
+      else
+        waiter.resolve(msg.result);
+      return;
+    }
+    if (msg.method) {
+      for (const listener of listeners)
+        listener(msg.method, msg.params ?? {});
+    }
+  };
+  const failPending = (error) => {
+    for (const waiter of pending.values())
+      waiter.reject(error);
+    pending.clear();
+  };
+  ws.onclose = () => failPending(new Error("CDP connection closed"));
+  return {
+    send(method, params = {}, timeoutMs = 20000) {
+      const id = next++;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          if (!pending.has(id))
+            return;
+          pending.delete(id);
+          reject(new Error(`CDP ${method} timed out`));
+        }, timeoutMs);
+        pending.set(id, {
+          resolve: (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          reject: (error) => {
+            clearTimeout(timer);
+            reject(error);
+          }
+        });
+        ws.send(JSON.stringify({ id, method, params }));
+      });
+    },
+    onEvent(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    close() {
+      ws.close();
+    }
+  };
+}
+async function connectXueqiuPage(cdpUrl) {
+  const targets = await (await fetch(`${cdpUrl}/json/list`)).json();
+  const pages = targets.filter((target) => target.type === "page" && /xueqiu\.com/.test(target.url || "") && target.webSocketDebuggerUrl);
+  if (pages.length === 0)
+    throw new Error("No xueqiu.com tab found in Chrome");
+  pages.sort((a, b) => Number(/www\.xueqiu\.com/.test(b.url || "")) - Number(/www\.xueqiu\.com/.test(a.url || "")));
+  const session = await connectCdp(pages[0].webSocketDebuggerUrl);
+  await session.send("Network.enable");
+  await session.send("Page.enable");
+  await session.send("Runtime.enable");
+  try {
+    await session.send("Emulation.setDeviceMetricsOverride", {
+      width: 1280,
+      height: 800,
+      deviceScaleFactor: 1,
+      mobile: false
+    });
+  } catch {}
+  return session;
+}
+
+// lib/sms.ts
+init_private();
+function smsIpcPaths(dataDir) {
+  const dir = join3(dataDir, "sms-login");
+  return {
+    dir,
+    code: join3(dir, "code"),
+    clicksDir: join3(dir, "clicks"),
+    captcha: join3(dir, "captcha.png")
+  };
+}
+function prepareSmsIpc(dataDir) {
+  const paths = smsIpcPaths(dataDir);
+  secureDirectory(dataDir);
+  secureDirectory(paths.dir);
+  secureDirectory(paths.clicksDir);
+  rmSync2(paths.code, { force: true });
+  for (const name of safeReaddir(paths.clicksDir)) {
+    rmSync2(join3(paths.clicksDir, name), { force: true });
+  }
+  return paths;
+}
+function normalizeAreaCode(raw) {
+  const digits = (raw ?? "86").trim().replace(/^\+/, "");
+  if (!/^\d{1,4}$/.test(digits) || digits === "0") {
+    throw new Error("--area-code expects a calling code such as 86 or 45");
+  }
+  return digits;
+}
+function normalizePhone(raw, areaCode) {
+  const digits = raw.trim().replace(/[\s-]/g, "");
+  if (!/^\d+$/.test(digits))
+    throw new Error("Phone number must be digits");
+  if (areaCode === "86" && !/^\d{11}$/.test(digits)) {
+    throw new Error("A +86 phone number must be 11 digits");
+  }
+  if (areaCode !== "86" && !/^\d{6,14}$/.test(digits)) {
+    throw new Error("Phone number must be 6 to 14 digits for this area code");
+  }
+  return digits;
+}
+function maskPhone(phone) {
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length >= 8)
+    return `${digits.slice(0, 3)}****${digits.slice(-4)}`;
+  if (digits.length >= 2)
+    return `${digits.slice(0, 1)}****${digits.slice(-1)}`;
+  return "****";
+}
+function phoneLogLabel(areaCode, phone) {
+  return `+${areaCode} ${maskPhone(phone)}`;
+}
+function normalizeSmsCode(raw) {
+  const digits = raw.trim();
+  if (!/^\d{4,8}$/.test(digits))
+    throw new Error("SMS code must be 4 to 8 digits");
+  return digits;
+}
+function parseCaptchaClicks(spec) {
+  const parts = spec.split(/[;\s]+/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 0) {
+    throw new Error("--captcha-click expects x,y pixel coordinates from the CAPTCHA_REQUIRED image");
+  }
+  return parts.map((part) => {
+    const match = /^(\d{1,5}),(\d{1,5})$/.exec(part);
+    if (!match)
+      throw new Error("--captcha-click expects x,y pixel coordinates, for example 120,80");
+    return { x: Number(match[1]), y: Number(match[2]) };
+  });
+}
+function writeSmsCode(dataDir, raw) {
+  const code = normalizeSmsCode(raw);
+  const paths = smsIpcPaths(dataDir);
+  secureDirectory(dataDir);
+  secureDirectory(paths.dir);
+  const tmp = `${paths.code}.${process.pid}.tmp`;
+  writeFileSync3(tmp, `${code}
+`, { encoding: "utf-8", mode: 384 });
+  secureFile(tmp);
+  renameSync(tmp, paths.code);
+  secureFile(paths.code);
+}
+function takeSmsCode(dataDir) {
+  const paths = smsIpcPaths(dataDir);
+  if (!existsSync3(paths.code))
+    return null;
+  let text = "";
+  try {
+    text = readFileSync2(paths.code, "utf-8");
+  } catch {
+    return null;
+  }
+  rmSync2(paths.code, { force: true });
+  try {
+    return normalizeSmsCode(text);
+  } catch {
+    return null;
+  }
+}
+function writeCaptchaClicks(dataDir, spec) {
+  const points = parseCaptchaClicks(spec);
+  const paths = smsIpcPaths(dataDir);
+  secureDirectory(dataDir);
+  secureDirectory(paths.dir);
+  secureDirectory(paths.clicksDir);
+  const name = `${Date.now()}-${randomBytes2(4).toString("hex")}`;
+  const file = join3(paths.clicksDir, name);
+  const body = points.map((point) => `${point.x},${point.y}`).join(`
+`) + `
+`;
+  writeFileSync3(file, body, { encoding: "utf-8", mode: 384 });
+  secureFile(file);
+  return points.length;
+}
+function takeCaptchaClicks(dataDir) {
+  const paths = smsIpcPaths(dataDir);
+  if (!existsSync3(paths.clicksDir))
+    return [];
+  const names = safeReaddir(paths.clicksDir).sort();
+  const points = [];
+  for (const name of names) {
+    const file = join3(paths.clicksDir, name);
+    let text = "";
+    try {
+      text = readFileSync2(file, "utf-8");
+    } catch {
+      continue;
+    }
+    rmSync2(file, { force: true });
+    for (const line of text.split(/\s+/)) {
+      if (!line)
+        continue;
+      try {
+        points.push(...parseCaptchaClicks(line));
+      } catch {}
+    }
+  }
+  return points;
+}
+function safeServerMessage(raw) {
+  const text = typeof raw === "string" && raw.trim() ? raw.trim() : "Xueqiu rejected the request";
+  return text.replace(/\d{4,}/g, "******").replace(/[\r\n]+/g, " ").slice(0, 180);
+}
+function scrubSecrets(message, secrets) {
+  let out = message;
+  for (const secret of secrets) {
+    if (secret && secret.length >= 4)
+      out = out.split(secret).join("******");
+  }
+  return out;
+}
+function classifySendBody(body) {
+  if (!body || typeof body !== "object")
+    return null;
+  const record = body;
+  if (record.success === true || record.success === 1)
+    return { ok: true };
+  if (record.success === false || record.error_description || record.error_code || record.message) {
+    return { ok: false, message: safeServerMessage(record.error_description || record.message) };
+  }
+  return null;
+}
+function geeTestRequiresChallenge(body) {
+  if (!body || typeof body !== "object" || !("available" in body))
+    return null;
+  return Boolean(body.available);
+}
+function classifyLoginBody(body) {
+  if (!body || typeof body !== "object")
+    return null;
+  const record = body;
+  if (record.error_code === undefined && record.result_code === undefined && record.success === undefined) {
+    return null;
+  }
+  const code = Number(record.error_code ?? record.result_code ?? (record.success === true ? 0 : NaN));
+  if (!Number.isFinite(code))
+    return null;
+  if (code === 0)
+    return { kind: "ok" };
+  if (code === 20099)
+    return { kind: "register" };
+  const message = safeServerMessage(record.error_description || record.message || `Xueqiu login error ${code}`);
+  if (code === 20094)
+    return { kind: "image-captcha", message };
+  return { kind: "reject", message };
+}
+var PAGE_API = `(() => {
+  if (window.__snowballSms) return true;
+  function notHidden(el) {
+    for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+      if (node.hasAttribute("hidden")) return false;
+      const style = getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+    }
+    return true;
+  }
+  function score(el) {
+    let z = 0;
+    let fixed = false;
+    let depth = 0;
+    for (let node = el; node && node !== document.documentElement; node = node.parentElement) {
+      depth += 1;
+      const style = getComputedStyle(node);
+      const value = Number(style.zIndex);
+      if (Number.isFinite(value)) z = Math.max(z, value);
+      if (style.position === "fixed" || style.position === "absolute") fixed = true;
+    }
+    return (fixed ? 1000000 : 0) + z * 1000 - depth;
+  }
+  function modal() {
+    const mains = [...document.querySelectorAll('[class*="modal__login__main"]')].filter(notHidden);
+    if (mains.length) return mains.reduce((best, node) => score(node) >= score(best) ? node : best);
+    const blocks = [...document.querySelectorAll("div")].filter((node) => {
+      const text = node.innerText || "";
+      return text.includes("\u9A8C\u8BC1\u7801\u767B\u5F55") && text.includes("\u53D1\u9001\u9A8C\u8BC1\u7801") && notHidden(node);
+    });
+    blocks.sort((a, b) => (a.innerText || "").length - (b.innerText || "").length);
+    return blocks[0] || null;
+  }
+  function setNativeValue(el, value) {
+    const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    if (!setter) return false;
+    const tracker = el._valueTracker;
+    if (tracker) tracker.setValue("");
+    setter.call(el, value);
+    el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+    return true;
+  }
+  function optionMatches(option, code) {
+    if (option.value === code) return "value";
+    const text = (option.textContent || "").replace(/\\s/g, "");
+    return text.endsWith("+" + code) ? "label" : "";
+  }
+  window.__snowballSms = {
+    notHidden,
+    open() {
+      const nodes = [...document.querySelectorAll("a,button,div,span")];
+      const link = nodes.find((node) => (node.innerText || "").trim() === "\u7ACB\u5373\u767B\u5F55/\u6CE8\u518C" && notHidden(node) && node.children.length === 0)
+        || nodes.find((node) => /btn--login/.test(String(node.className || "")) && notHidden(node));
+      if (link) link.click();
+      return Boolean(link || modal());
+    },
+    overlay() {
+      const root = modal();
+      return Boolean(root && score(root) >= 1000000);
+    },
+    status(areaCode, phone) {
+      const root = modal();
+      if (!root) {
+        return { modal: false, areaValue: "", areaSupported: false, phoneFilled: false, agreementChecked: false, sendVisible: false };
+      }
+      const selects = [...root.querySelectorAll("select")].filter(notHidden);
+      let supported = false;
+      let areaValue = "";
+      for (const select of selects) {
+        const exact = [...select.options].find((option) => optionMatches(option, areaCode) === "value");
+        const labeled = [...select.options].filter((option) => optionMatches(option, areaCode));
+        const chosen = exact || (labeled.length === 1 ? labeled[0] : null);
+        if (chosen) {
+          supported = true;
+          areaValue = select.value;
+          break;
+        }
+      }
+      const phoneInput = [...root.querySelectorAll("input")].find((input) => input.placeholder === "\u8BF7\u8F93\u5165\u624B\u673A\u53F7" && notHidden(input));
+      const send = [...root.querySelectorAll("a,button,span")].find((node) => (node.textContent || "").trim() === "\u53D1\u9001\u9A8C\u8BC1\u7801" && notHidden(node));
+      const unchecked = [...root.querySelectorAll('[class*="nochecked"]')].some(notHidden);
+      return {
+        modal: true,
+        areaValue,
+        areaSupported: supported,
+        phoneFilled: Boolean(phoneInput && phoneInput.value === phone),
+        agreementChecked: !unchecked,
+        sendVisible: Boolean(send),
+      };
+    },
+    setArea(areaCode) {
+      const root = modal();
+      if (!root) return { ok: false, reason: "no-modal" };
+      const selects = [...root.querySelectorAll("select")].filter(notHidden);
+      let match = null;
+      for (const select of selects) {
+        const exact = [...select.options].find((option) => optionMatches(option, areaCode) === "value");
+        if (exact) { match = { select, option: exact }; break; }
+        const labeled = [...select.options].filter((option) => optionMatches(option, areaCode));
+        if (labeled.length === 1) match = { select, option: labeled[0] };
+      }
+      if (!match) return { ok: false, reason: "unsupported" };
+      setNativeValue(match.select, match.option.value);
+      return { ok: match.select.value === match.option.value, value: match.select.value };
+    },
+    setPhone(phone) {
+      const root = modal();
+      const input = root && [...root.querySelectorAll("input")].find((node) => node.placeholder === "\u8BF7\u8F93\u5165\u624B\u673A\u53F7" && notHidden(node));
+      if (!input) return { ok: false, reason: "no-input" };
+      setNativeValue(input, phone);
+      return { ok: input.value === phone };
+    },
+    acceptAgreement() {
+      const root = modal();
+      if (!root) return { ok: false };
+      const icon = [...root.querySelectorAll('[class*="nochecked"]')].find(notHidden);
+      if (icon) icon.click();
+      const still = [...root.querySelectorAll('[class*="nochecked"]')].some(notHidden);
+      return { ok: !still };
+    },
+    clickSend() {
+      const root = modal();
+      const button = root && [...root.querySelectorAll("a,button,span")].find((node) => (node.textContent || "").trim() === "\u53D1\u9001\u9A8C\u8BC1\u7801" && notHidden(node) && node.children.length === 0);
+      if (!button) return { ok: false };
+      button.click();
+      return { ok: true };
+    },
+    setCode(code) {
+      const root = modal();
+      const input = root && [...root.querySelectorAll("input")].find((node) => node.placeholder === "\u8BF7\u8F93\u5165\u9A8C\u8BC1\u7801" && notHidden(node));
+      if (!input) return { ok: false, reason: "no-input" };
+      setNativeValue(input, code);
+      return { ok: input.value === code };
+    },
+    clickLogin() {
+      const root = modal();
+      const button = root && [...root.querySelectorAll('[class*="modal__login__btn"]')].find((node) => {
+        const text = (node.innerText || "").replace(/\\s/g, "");
+        return text === "\u767B\u5F55" && notHidden(node);
+      });
+      if (!button) return { ok: false };
+      button.click();
+      return { ok: true };
+    },
+    geetest() {
+      const panel = document.querySelector(".geetest_panel");
+      if (!panel) return { open: false, marker: "", text: "" };
+      const style = getComputedStyle(panel);
+      const box = panel.getBoundingClientRect();
+      const open = style.display !== "none" && style.visibility !== "hidden" && box.width > 40 && box.height > 40;
+      const image = panel.querySelector("img");
+      const marker = image && image.src ? String(image.src).slice(0, 160) : (panel.className || "").slice(0, 160);
+      const text = (panel.innerText || "").replace(/\\s+/g, " ").slice(0, 80);
+      return { open, marker, text };
+    },
+    toast() {
+      const text = document.body ? document.body.innerText || "" : "";
+      const known = ["\u8BF7\u9605\u8BFB\u5E76\u52FE\u9009\u534F\u8BAE", "\u8BF7\u8F93\u5165\u624B\u673A\u53F7", "\u8BF7\u8F93\u5165\u6B63\u786E\u7684\u624B\u673A\u53F7"];
+      return known.find((item) => text.includes(item)) || "";
+    },
+  };
+  return true;
+})()`;
+function pathnameOf(url) {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url.split("?")[0];
+  }
+}
+function watchTraffic(session) {
+  const queue = [];
+  session.onEvent((method, params) => {
+    if (method !== "Network.responseReceived")
+      return;
+    const url = String(params.response?.url || "");
+    const path = pathnameOf(url);
+    if (!/send_verification_code\.json$|\/snb\/provider\/login$|\/gee_test\/get$/.test(path))
+      return;
+    queue.push({
+      requestId: String(params.requestId),
+      url: path,
+      status: Number(params.response?.status || 0)
+    });
+  });
+  const seen = new Set;
+  const attempts = new Map;
+  return {
+    async drain() {
+      const batch = queue.splice(0);
+      const hits = [];
+      for (const item of batch) {
+        if (seen.has(item.requestId))
+          continue;
+        try {
+          const result = await session.send("Network.getResponseBody", { requestId: item.requestId }, 8000);
+          seen.add(item.requestId);
+          const text = result.base64Encoded ? Buffer.from(result.body, "base64").toString("utf8") : String(result.body ?? "");
+          let body = null;
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = null;
+          }
+          hits.push({ url: item.url, status: item.status, body });
+        } catch {
+          const count = (attempts.get(item.requestId) ?? 0) + 1;
+          attempts.set(item.requestId, count);
+          if (count < 5)
+            queue.push(item);
+        }
+      }
+      return hits;
+    }
+  };
+}
+async function evalValue(session, expression) {
+  const result = await session.send("Runtime.evaluate", {
+    expression,
+    awaitPromise: true,
+    returnByValue: true
+  });
+  if (result.exceptionDetails) {
+    const description = result.exceptionDetails.exception?.description || result.exceptionDetails.text || "page script failed";
+    throw new Error(String(description).split(`
+`)[0]);
+  }
+  return result.result?.value;
+}
+function sleep2(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function connectWhenReady(cdpUrl) {
+  const deadline = Date.now() + 20000;
+  let last = "No xueqiu.com tab found in Chrome";
+  while (Date.now() < deadline) {
+    try {
+      const session = await connectXueqiuPage(cdpUrl);
+      const ready = await evalValue(session, "document.readyState");
+      const title = await evalValue(session, "document.title || ''");
+      if (ready === "complete" && title && !/\u62E6\u622A|\u8BF7\u6C42\u5F02\u5E38/.test(title))
+        return session;
+      session.close();
+    } catch (error) {
+      last = error?.message || last;
+    }
+    await sleep2(400);
+  }
+  throw new Error(last);
+}
+async function preparePhoneForm(session, phone, areaCode) {
+  await evalValue(session, PAGE_API);
+  await evalValue(session, "window.__snowballSms.open()");
+  const overlayDeadline = Date.now() + 8000;
+  while (Date.now() < overlayDeadline) {
+    if (await evalValue(session, "window.__snowballSms.overlay()"))
+      break;
+    await sleep2(200);
+  }
+  const deadline = Date.now() + 1e4;
+  let status = await evalValue(session, `window.__snowballSms.status(${JSON.stringify(areaCode)}, ${JSON.stringify(phone)})`);
+  while (!status.modal && Date.now() < deadline) {
+    await sleep2(300);
+    status = await evalValue(session, `window.__snowballSms.status(${JSON.stringify(areaCode)}, ${JSON.stringify(phone)})`);
+  }
+  if (!status.modal)
+    throw new Error("Could not open the Xueqiu login modal");
+  const area = await evalValue(session, `window.__snowballSms.setArea(${JSON.stringify(areaCode)})`);
+  if (!area.ok) {
+    throw new Error(area.reason === "unsupported" ? `Area code +${areaCode} is not in the Xueqiu login list` : "Could not set the area code on the login form");
+  }
+  const filled = await evalValue(session, `window.__snowballSms.setPhone(${JSON.stringify(phone)})`);
+  if (!filled.ok)
+    throw new Error("Could not fill the phone number on the login form");
+  for (let attempt = 0;attempt < 4; attempt++) {
+    const agreed = await evalValue(session, "window.__snowballSms.acceptAgreement()");
+    if (agreed.ok)
+      break;
+    await sleep2(200);
+  }
+  status = await evalValue(session, `window.__snowballSms.status(${JSON.stringify(areaCode)}, ${JSON.stringify(phone)})`);
+  if (!status.agreementChecked)
+    throw new Error("Could not check the Xueqiu agreement box");
+  if (!status.phoneFilled)
+    throw new Error("The login form did not keep the phone number");
+  if (!status.sendVisible)
+    throw new Error("The \u53D1\u9001\u9A8C\u8BC1\u7801 button is not visible");
+  return status;
+}
+function attachStdinCodes(onCode) {
+  const stdin = process.stdin;
+  if (!stdin || !stdin.readable)
+    return () => {};
+  let buffer = "";
+  const onData = (chunk) => {
+    buffer += chunk;
+    let newline = buffer.indexOf(`
+`);
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      try {
+        onCode(normalizeSmsCode(line));
+      } catch {}
+      newline = buffer.indexOf(`
+`);
+    }
+  };
+  stdin.setEncoding("utf8");
+  stdin.on("data", onData);
+  stdin.resume();
+  return () => {
+    stdin.off("data", onData);
+    stdin.pause();
+  };
+}
+async function saveCaptchaPng(session, file) {
+  const shot = await session.send("Page.captureScreenshot", { format: "png" });
+  mkdirSync3(join3(file, ".."), { recursive: true, mode: 448 });
+  writeFileSync3(file, Buffer.from(shot.data, "base64"), { mode: 384 });
+  secureFile(file);
+  return file;
+}
+async function dispatchClicks(session, dataDir) {
+  for (const point of takeCaptchaClicks(dataDir)) {
+    await session.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      clickCount: 1
+    });
+    await session.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      clickCount: 1
+    });
+    await sleep2(150);
+  }
+}
+async function runPhoneLogin(cdpUrl, options) {
+  const phone = options.phone;
+  const areaCode = options.areaCode;
+  const secrets = [phone];
+  const deadline = Date.now() + options.timeoutMs;
+  const paths = prepareSmsIpc(options.dataDir);
+  const queued = [];
+  const stopStdin = attachStdinCodes((code) => queued.push(code));
+  let session = null;
+  try {
+    await getWafCookies(cdpUrl);
+    session = await connectWhenReady(cdpUrl);
+    const traffic = watchTraffic(session);
+    console.log(`  Opening the Xueqiu login modal for ${phoneLogLabel(areaCode, phone)}.`);
+    await preparePhoneForm(session, phone, areaCode);
+    const clicked = await evalValue(session, "window.__snowballSms.clickSend()");
+    if (!clicked.ok)
+      throw new Error("Could not click \u53D1\u9001\u9A8C\u8BC1\u7801");
+    const sent = await waitForSmsSend(session, traffic, paths.captcha, options.dataDir, deadline);
+    if (!sent.ok)
+      throw new Error(sent.message);
+    console.log("SMS_SENT=1");
+    console.log(`  SMS sent to ${phoneLogLabel(areaCode, phone)}.`);
+    console.log("  From another shell: snowball login --sms-code <code>");
+    console.log("  That writes ~/.snowball-cli/sms-login/code (mode 0600). A code typed into this terminal is accepted too.");
+    return await waitForLogin(session, traffic, paths.captcha, options.dataDir, deadline, queued, secrets, cdpUrl);
+  } catch (error) {
+    throw new Error(scrubSecrets(error?.message || "SMS login failed", secrets));
+  } finally {
+    stopStdin();
+    session?.close();
+  }
+}
+async function announceCaptcha(session, file, seen, marker) {
+  if (seen.has(marker))
+    return;
+  seen.add(marker);
+  const path = await saveCaptchaPng(session, file);
+  console.log(`CAPTCHA_REQUIRED=${path}`);
+  console.log("  GeeTest is showing. Solve it in the browser, or click the screenshot from another shell:");
+  console.log("  snowball login --captcha-click x,y");
+  console.log("  Coordinates are pixels in that PNG (top-left origin). Repeat for each click, including \u786E\u8BA4.");
+}
+async function waitForSmsSend(session, traffic, captchaFile, dataDir, deadline) {
+  const announced = new Set;
+  let sawChallenge = false;
+  const firstSlice = Math.min(deadline, Date.now() + 20000);
+  while (Date.now() < firstSlice) {
+    const read = await readSendHits(traffic);
+    if (read.challenge)
+      sawChallenge = true;
+    if (read.send)
+      return read.send;
+    const panel = await evalValue(session, "window.__snowballSms.geetest()");
+    if (panel.open) {
+      sawChallenge = true;
+      await announceCaptcha(session, captchaFile, announced, panel.marker || "panel");
+      break;
+    }
+    const toast = await evalValue(session, "window.__snowballSms.toast()");
+    if (toast)
+      return { ok: false, message: toast };
+    await sleep2(300);
+  }
+  if (!sawChallenge && Date.now() >= firstSlice) {
+    const late = await readSendHits(traffic);
+    if (late.send)
+      return late.send;
+    const panel = await evalValue(session, "window.__snowballSms.geetest()");
+    if (!panel.open) {
+      return { ok: false, message: "\u53D1\u9001\u9A8C\u8BC1\u7801 did not reach Xueqiu, and no GeeTest challenge appeared" };
+    }
+    sawChallenge = true;
+  }
+  while (Date.now() < deadline) {
+    const panel = await evalValue(session, "window.__snowballSms.geetest()");
+    if (panel.open)
+      await announceCaptcha(session, captchaFile, announced, panel.marker || "panel");
+    if (panel.open)
+      await dispatchClicks(session, dataDir);
+    const read = await readSendHits(traffic);
+    if (read.send)
+      return read.send;
+    const toast = await evalValue(session, "window.__snowballSms.toast()");
+    if (toast && !panel.open)
+      return { ok: false, message: toast };
+    await sleep2(300);
+  }
+  return { ok: false, message: "Timed out waiting for the GeeTest challenge before the SMS could be sent" };
+}
+async function readSendHits(traffic) {
+  let send = null;
+  let challenge = false;
+  for (const hit of await traffic.drain()) {
+    if (hit.url.endsWith("/gee_test/get")) {
+      if (geeTestRequiresChallenge(hit.body))
+        challenge = true;
+      continue;
+    }
+    if (!hit.url.endsWith("/account/sms/send_verification_code.json"))
+      continue;
+    const classified = classifySendBody(hit.body);
+    if (classified)
+      send = classified;
+    else if (hit.status >= 400)
+      send = { ok: false, message: `Xueqiu refused the SMS request (HTTP ${hit.status})` };
+  }
+  return { send, challenge };
+}
+async function waitForLogin(session, traffic, captchaFile, dataDir, deadline, queued, secrets, cdpUrl) {
+  const announced = new Set;
+  let submitting = false;
+  let sawRegister = false;
+  let registerAt = 0;
+  let submitAt = 0;
+  while (Date.now() < deadline) {
+    const fromFile = takeSmsCode(dataDir);
+    if (fromFile)
+      queued.push(fromFile);
+    const panel = await evalValue(session, "window.__snowballSms.geetest()");
+    if (panel.open) {
+      await announceCaptcha(session, captchaFile, announced, panel.marker || "login-panel");
+      await dispatchClicks(session, dataDir);
+    }
+    if (!submitting && queued.length > 0 && !panel.open) {
+      const code = queued.shift();
+      secrets.push(code);
+      const filled = await evalValue(session, `window.__snowballSms.setCode(${JSON.stringify(code)})`);
+      if (!filled.ok)
+        throw new Error("Could not fill the verification code");
+      const clicked = await evalValue(session, "window.__snowballSms.clickLogin()");
+      if (!clicked.ok)
+        throw new Error("Could not click \u767B\u5F55");
+      submitting = true;
+      submitAt = Date.now();
+      sawRegister = false;
+    }
+    for (const hit of await traffic.drain()) {
+      if (!hit.url.endsWith("/snb/provider/login"))
+        continue;
+      const outcome = classifyLoginBody(hit.body);
+      if (!outcome)
+        continue;
+      if (outcome.kind === "register") {
+        sawRegister = true;
+        registerAt = Date.now();
+        continue;
+      }
+      if (outcome.kind === "ok") {
+        const cookie = await waitForLoginCookie(cdpUrl);
+        if (!cookie)
+          throw new Error("Xueqiu accepted the login but xq_is_login was not set");
+        return cookie;
+      }
+      if (outcome.kind === "image-captcha") {
+        await announceCaptcha(session, captchaFile, announced, `image-${Date.now()}`);
+      }
+      console.log("SMS_CODE_REJECTED=1");
+      console.log(`SMS_ERROR=${outcome.message}`);
+      submitting = false;
+      sawRegister = false;
+    }
+    if (submitting && sawRegister && !panel.open && Date.now() - registerAt > 8000) {
+      const again = await evalValue(session, "window.__snowballSms.clickLogin()");
+      if (!again.ok)
+        throw new Error("Xueqiu returned 20099 but the register resubmit could not be clicked");
+      sawRegister = false;
+      registerAt = Date.now();
+    } else if (submitting && !sawRegister && !panel.open && submitAt && Date.now() - submitAt > 20000) {
+      console.log("SMS_CODE_REJECTED=1");
+      console.log("SMS_ERROR=Timed out waiting for Xueqiu to accept the code");
+      submitting = false;
+      submitAt = 0;
+    }
+    await sleep2(300);
+  }
+  throw new Error("Timed out waiting for the SMS code");
+}
+async function waitForLoginCookie(cdpUrl) {
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    try {
+      const cookie = await getWafCookies(cdpUrl);
+      if (hasLoginCookie(cookie))
+        return cookie;
+    } catch {}
+    await sleep2(400);
+  }
+  return null;
+}
+function safeReaddir(dir) {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
 // lib/api.ts
 init_auth();
 var STOCK_URL = "https://stock.xueqiu.com";
@@ -5436,9 +6277,9 @@ var CDP_URL = process.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://12
 var MODE = process.argv[2];
 var VERSION = "0.3.2";
 function showLogo() {
-  for (const base of [__dirname2, join3(__dirname2, "..")]) {
+  for (const base of [__dirname2, join4(__dirname2, "..")]) {
     try {
-      console.log(readFileSync2(join3(base, "lib", "logo.ansi"), "utf-8"));
+      console.log(readFileSync3(join4(base, "lib", "logo.ansi"), "utf-8"));
       return;
     } catch {}
   }
@@ -5508,18 +6349,66 @@ async function waitForManualLogin(cdpUrl, timeoutMs) {
 var commands = {
   Auth: {
     login: {
-      usage: "login [--manual] [--qr-png <path>] [--timeout <sec>] [--chrome <path>]",
-      desc: "QR login. Default wait 10 min; --qr-png writes a PNG (no ENTER)",
+      usage: "login [--phone <number>] [--area-code <code>] [--sms-code <code>] [--captcha-click <x,y>] [--qr-png <path>] [--timeout <sec>]",
+      desc: "QR login, or phone + SMS (code from another shell)",
       run: async () => {
-        showLogo();
-        console.log(`  Snowball CLI \u2014 Login
-`);
         const qrPng = flag("qr-png");
+        const phoneRaw = flag("phone");
+        const smsCode = flag("sms-code");
+        const captchaClick = flag("captcha-click");
+        const areaRaw = flag("area-code");
         if (hasFlag("qr-png") && (!qrPng || qrPng.startsWith("-"))) {
           console.error(`
   Usage: snowball login --qr-png <path.png>
 `);
           process.exit(1);
+        }
+        if (hasFlag("phone") && (!phoneRaw || phoneRaw.startsWith("-"))) {
+          console.error(`
+  Usage: snowball login --phone <number> [--area-code 86]
+`);
+          process.exit(1);
+        }
+        if (hasFlag("sms-code") && (!smsCode || smsCode.startsWith("-"))) {
+          console.error(`
+  Usage: snowball login --sms-code <code>
+`);
+          process.exit(1);
+        }
+        if (hasFlag("captcha-click") && (!captchaClick || captchaClick.startsWith("-"))) {
+          console.error(`
+  Usage: snowball login --captcha-click <x,y>
+`);
+          process.exit(1);
+        }
+        if (hasFlag("area-code") && (!areaRaw || areaRaw.startsWith("-"))) {
+          console.error(`
+  Usage: snowball login --area-code <code>   (default 86)
+`);
+          process.exit(1);
+        }
+        if ((smsCode || captchaClick) && (phoneRaw || hasFlag("manual") || qrPng)) {
+          console.error(`
+  Run --sms-code and --captcha-click in a separate snowball login command.
+`);
+          process.exit(1);
+        }
+        if (smsCode && captchaClick) {
+          console.error(`
+  Pass --sms-code and --captcha-click as separate commands.
+`);
+          process.exit(1);
+        }
+        if (smsCode) {
+          writeSmsCode(DATA_DIR, smsCode);
+          console.log("SMS_CODE_WRITTEN=1");
+          return;
+        }
+        if (captchaClick) {
+          parseCaptchaClicks(captchaClick);
+          const count = writeCaptchaClicks(DATA_DIR, captchaClick);
+          console.log(`CAPTCHA_CLICK=${count}`);
+          return;
         }
         const timeoutRaw = flag("timeout");
         if (hasFlag("timeout") && (!timeoutRaw || timeoutRaw.startsWith("-"))) {
@@ -5537,17 +6426,36 @@ var commands = {
 `);
           process.exit(1);
         }
+        let phone;
+        let areaCode;
+        if (phoneRaw) {
+          if (hasFlag("manual") || qrPng) {
+            throw new Error("--phone cannot be combined with --manual or --qr-png");
+          }
+          areaCode = normalizeAreaCode(areaRaw);
+          phone = normalizePhone(phoneRaw, areaCode);
+        }
+        showLogo();
+        console.log(`  Snowball CLI \u2014 Login
+`);
         try {
           await ensureChrome(CDP_URL, flag("chrome") ?? process.env.CHROME_PATH);
-          if (hasFlag("manual")) {
-            console.log(`  Opening xueqiu.com...
+          console.log(`  Opening xueqiu.com...
 `);
-            await openXueqiuTab(CDP_URL);
+          await openXueqiuTab(CDP_URL);
+          if (phone && areaCode) {
+            const cookie = await runPhoneLogin(CDP_URL, {
+              phone,
+              areaCode,
+              timeoutMs,
+              dataDir: DATA_DIR
+            });
+            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-sms" });
+            console.log("LOGIN_OK=1");
+          } else if (hasFlag("manual")) {
             const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
             saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
           } else {
-            console.log("  Opening xueqiu.com (background)...");
-            await openXueqiuTab(CDP_URL);
             try {
               const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng, timeoutMs });
               saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });

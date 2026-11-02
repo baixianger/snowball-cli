@@ -7,12 +7,21 @@ import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import {
+  DATA_DIR,
   saveToken,
   loadToken,
   verifyToken,
 } from "./lib/auth";
 import { qrLogin, hasLoginCookie, getWafCookies, parseLoginTimeoutMs } from "./lib/qr-terminal";
 import { ensureChrome, openXueqiuTab, stopStartedXvfb } from "./lib/browser";
+import {
+  normalizeAreaCode,
+  normalizePhone,
+  parseCaptchaClicks,
+  runPhoneLogin,
+  writeCaptchaClicks,
+  writeSmsCode,
+} from "./lib/sms";
 import * as api from "./lib/api";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -122,16 +131,54 @@ const commands: Record<string, Record<string, Command>> = {
   // ── Auth ──────────────────────────────────────────────────────
   "Auth": {
     login: {
-      usage: "login [--manual] [--qr-png <path>] [--timeout <sec>] [--chrome <path>]",
-      desc: "QR login. Default wait 10 min; --qr-png writes a PNG (no ENTER)",
+      usage: "login [--phone <number>] [--area-code <code>] [--sms-code <code>] [--captcha-click <x,y>] [--qr-png <path>] [--timeout <sec>]",
+      desc: "QR login, or phone + SMS (code from another shell)",
       run: async () => {
-        showLogo();
-        console.log("  Snowball CLI — Login\n");
         const qrPng = flag("qr-png");
+        const phoneRaw = flag("phone");
+        const smsCode = flag("sms-code");
+        const captchaClick = flag("captcha-click");
+        const areaRaw = flag("area-code");
         if (hasFlag("qr-png") && (!qrPng || qrPng.startsWith("-"))) {
           console.error("\n  Usage: snowball login --qr-png <path.png>\n");
           process.exit(1);
         }
+        if (hasFlag("phone") && (!phoneRaw || phoneRaw.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --phone <number> [--area-code 86]\n");
+          process.exit(1);
+        }
+        if (hasFlag("sms-code") && (!smsCode || smsCode.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --sms-code <code>\n");
+          process.exit(1);
+        }
+        if (hasFlag("captcha-click") && (!captchaClick || captchaClick.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --captcha-click <x,y>\n");
+          process.exit(1);
+        }
+        if (hasFlag("area-code") && (!areaRaw || areaRaw.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --area-code <code>   (default 86)\n");
+          process.exit(1);
+        }
+        if ((smsCode || captchaClick) && (phoneRaw || hasFlag("manual") || qrPng)) {
+          console.error("\n  Run --sms-code and --captcha-click in a separate snowball login command.\n");
+          process.exit(1);
+        }
+        if (smsCode && captchaClick) {
+          console.error("\n  Pass --sms-code and --captcha-click as separate commands.\n");
+          process.exit(1);
+        }
+        if (smsCode) {
+          writeSmsCode(DATA_DIR, smsCode);
+          console.log("SMS_CODE_WRITTEN=1");
+          return;
+        }
+        if (captchaClick) {
+          parseCaptchaClicks(captchaClick);
+          const count = writeCaptchaClicks(DATA_DIR, captchaClick);
+          console.log(`CAPTCHA_CLICK=${count}`);
+          return;
+        }
+
         const timeoutRaw = flag("timeout");
         if (hasFlag("timeout") && (!timeoutRaw || timeoutRaw.startsWith("-"))) {
           console.error("\n  Usage: snowball login --timeout <seconds>   (default 600)\n");
@@ -145,17 +192,37 @@ const commands: Record<string, Record<string, Command>> = {
           process.exit(1);
         }
 
+        let phone: string | undefined;
+        let areaCode: string | undefined;
+        if (phoneRaw) {
+          if (hasFlag("manual") || qrPng) {
+            throw new Error("--phone cannot be combined with --manual or --qr-png");
+          }
+          areaCode = normalizeAreaCode(areaRaw);
+          phone = normalizePhone(phoneRaw, areaCode);
+        }
+
+        showLogo();
+        console.log("  Snowball CLI — Login\n");
+
         try {
           await ensureChrome(CDP_URL, flag("chrome") ?? process.env.CHROME_PATH);
+          console.log("  Opening xueqiu.com...\n");
+          await openXueqiuTab(CDP_URL);
 
-          if (hasFlag("manual")) {
-            console.log("  Opening xueqiu.com...\n");
-            await openXueqiuTab(CDP_URL);
+          if (phone && areaCode) {
+            const cookie = await runPhoneLogin(CDP_URL, {
+              phone,
+              areaCode,
+              timeoutMs,
+              dataDir: DATA_DIR,
+            });
+            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-sms" });
+            console.log("LOGIN_OK=1");
+          } else if (hasFlag("manual")) {
             const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
             saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
           } else {
-            console.log("  Opening xueqiu.com (background)...");
-            await openXueqiuTab(CDP_URL);
             try {
               const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng, timeoutMs });
               saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });

@@ -59,6 +59,10 @@ snowball kol SH600519
 |---|---|
 | `snowball login` | 终端内二维码，用雪球 App 扫码 |
 | `snowball login --qr-png <文件>` | 写出 PNG 并一直等到 App 确认（不用按回车）。给要把图片发到手机的 Agent 用 |
+| `snowball login --phone <号码> [--area-code 86]` | 手机号 + 短信验证码。成功发码打印 `SMS_SENT=1` 然后等待。默认区号 86，丹麦是 45 |
+| `snowball login --sms-code <验证码>` | 另一个 shell 把验证码交给正在等待的登录。这个进程的 stdin 有输入时也会读 |
+| `snowball login --captcha-click <x,y>` | 可选。按 `CAPTCHA_REQUIRED` 截图里的像素点 GeeTest |
+| `snowball login --timeout <秒>` | 二维码刷新或短信等待的总时长，默认 600 |
 | `snowball login --manual` | 打开 Chrome 窗口扫码 |
 | `snowball token <cookie>` | 粘贴 DevTools 中的 cookie |
 | `snowball export` / `import <b64>` | 跨机器传输 token |
@@ -152,6 +156,21 @@ snowball login [--qr-png <文件>]
   ├─ 一直等到 App 里点确认。stdin 不是 TTY，或用了 --qr-png 时，不需要按回车
   ├─ 关掉本次启动的 Xvfb
   └─ 保存 Cookie 到 ~/.snowball-cli/token.json（文件 0600，目录 0700）
+
+snowball login --phone <号码> [--area-code 86] [--timeout 600]
+  ├─ Chrome / Xvfb 与扫码登录相同
+  ├─ 打开 www.xueqiu.com 登录框（验证码登录）
+  ├─ 勾选协议，填入手机号，点击发送验证码
+  ├─ 出现 GeeTest（available:1）时打印 CAPTCHA_REQUIRED=<png> 并继续等
+  │    另一个 shell 可以：snowball login --captcha-click x,y（截图像素）
+  ├─ 打印 SMS_SENT=1
+  ├─ 等待验证码。另一个 shell：snowball login --sms-code <验证码>
+  │    写入 ~/.snowball-cli/sms-login/code（目录 0700，文件 0600）
+  │    当前进程的 stdin 如果有一行数字，也会当作验证码
+  ├─ 页面自己 POST /snb/provider/login（SM4）。错误码 20099 会按网页那样自动注册后再提交
+  ├─ 验证码错误或过期打印 SMS_CODE_REJECTED=1，超时前可以再提交一次
+  ├─ 只有拿到 xq_is_login 才打印 LOGIN_OK=1，token.json 仍是 0600
+  └─ 关掉本次启动的 Xvfb。不会打印完整手机号、验证码或 Cookie
 ```
 
 ## 协议
