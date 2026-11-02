@@ -26,9 +26,9 @@ ssh vps "apt install -y xvfb google-chrome-stable"   # or: chromium-browser
 ssh vps "~/.bun/bin/snowball login --qr-png /tmp/xueqiu-qr.png"
 # prints QR_PNG=/tmp/xueqiu-qr.png and waits until the Xueqiu app confirms
 
-# No Xueqiu app: phone + SMS. Default area code is 86.
+# No Xueqiu app: phone + SMS. A TTY prompts for the code.
 ssh vps "~/.bun/bin/snowball login --phone <number> --area-code 86"
-# after SMS_SENT=1, from another shell:
+# No TTY (or --no-wait): SMS_SENT=1, then finish from the saved session:
 ssh vps "~/.bun/bin/snowball login --sms-code <code>"
 ```
 

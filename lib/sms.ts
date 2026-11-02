@@ -1,55 +1,62 @@
 /**
- * Phone + SMS login by driving Xueqiu's own login modal.
+ * Phone + SMS login.
  *
- * The page posts /account/sms/send_verification_code.json, then
- * /snb/provider/login with an SM4 encryptData body. Error 20099 makes that
- * same page resubmit with is_register=1. Doing this inside headed Chrome
- * keeps WAF cookies, GeeTest, and the cipher in the site's JavaScript.
+ * `snowball login --phone` opens the real www.xueqiu.com modal in headed
+ * Chrome, sends the SMS, and writes ~/.snowball-cli/sms-login/session.json
+ * (directory 0700, file 0600) before it asks for anything. A TTY then
+ * prompts for the code and finishes in the same process. No TTY, or
+ * --no-wait, prints SMS_SENT=1 and exits. `snowball login --sms-code`
+ * loads that file and POSTs /snb/provider/login, so killing the prompt
+ * does not lose the code and does not send a second SMS.
  *
- * A second process delivers the SMS code by writing
- * ~/.snowball-cli/sms-login/code (directory 0700, file 0600). A fifo would
- * block that process until this one opened the read end, so a file renamed
- * into place is the channel. GeeTest clicks use one file per command under
- * sms-login/clicks/. A code typed on stdin is accepted too when the stream
- * has data.
+ * GeeTest clicks only work on the widget that is open. The interactive
+ * prompt happens while Chrome is still up. `--captcha-click` starts a new
+ * widget and applies the coordinates there.
  */
 
-import { randomBytes } from "crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
-import { join } from "path";
+import { writeFileSync } from "fs";
 import { connectXueqiuPage, type CdpSession } from "./cdp";
+import { ensureChrome, openXueqiuTab, stopSnowballChrome, stopStartedXvfb } from "./browser";
 import { secureDirectory, secureFile } from "./private";
-import { getWafCookies, hasLoginCookie } from "./qr-terminal";
+import { fetchXueqiu, getWafCookies, hasLoginCookie, mergeCookies, XUEQIU_ORIGIN } from "./qr-terminal";
+import {
+  SMS_CODE_ATTEMPTS,
+  SMS_CODE_PROMPT,
+  SMS_SESSION_TTL_MS,
+  CAPTCHA_CLICK_PROMPT,
+  buildLoginPlain,
+  captchaPhaseMessage,
+  clearSmsSession,
+  decryptDeviceInfo,
+  decryptXueqiu,
+  encryptXueqiu,
+  geetestFromSendBody,
+  loadSmsSession,
+  loginRequestBodies,
+  looksLikeBodyMismatch,
+  parseSendPost,
+  saveSmsSession,
+  sessionProblemMessage,
+  smsLoginPaths,
+  type SmsGeetestFields,
+  type SmsSession,
+} from "./sms-http";
 
-export interface SmsIpcPaths {
-  dir: string;
-  code: string;
-  clicksDir: string;
-  captcha: string;
-}
+export {
+  SMS_CODE_ATTEMPTS,
+  SMS_CODE_PROMPT,
+  SMS_SESSION_TTL_MS,
+  CAPTCHA_CLICK_PROMPT,
+  captchaPhaseMessage,
+  clearSmsSession,
+  loadSmsSession,
+  saveSmsSession,
+  sessionProblemMessage,
+  shouldPromptForSms,
+  smsLoginPaths,
+} from "./sms-http";
 
-export function smsIpcPaths(dataDir: string): SmsIpcPaths {
-  const dir = join(dataDir, "sms-login");
-  return {
-    dir,
-    code: join(dir, "code"),
-    clicksDir: join(dir, "clicks"),
-    captcha: join(dir, "captcha.png"),
-  };
-}
-
-/** Drop a code or click left by an earlier attempt. */
-export function prepareSmsIpc(dataDir: string): SmsIpcPaths {
-  const paths = smsIpcPaths(dataDir);
-  secureDirectory(dataDir);
-  secureDirectory(paths.dir);
-  secureDirectory(paths.clicksDir);
-  rmSync(paths.code, { force: true });
-  for (const name of safeReaddir(paths.clicksDir)) {
-    rmSync(join(paths.clicksDir, name), { force: true });
-  }
-  return paths;
-}
+export type { SmsSession } from "./sms-http";
 
 export function normalizeAreaCode(raw: string | undefined): string {
   const digits = (raw ?? "86").trim().replace(/^\+/, "");
@@ -106,76 +113,6 @@ export function parseCaptchaClicks(spec: string): CaptchaPoint[] {
     if (!match) throw new Error("--captcha-click expects x,y pixel coordinates, for example 120,80");
     return { x: Number(match[1]), y: Number(match[2]) };
   });
-}
-
-export function writeSmsCode(dataDir: string, raw: string): void {
-  const code = normalizeSmsCode(raw);
-  const paths = smsIpcPaths(dataDir);
-  secureDirectory(dataDir);
-  secureDirectory(paths.dir);
-  const tmp = `${paths.code}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${code}\n`, { encoding: "utf-8", mode: 0o600 });
-  secureFile(tmp);
-  renameSync(tmp, paths.code);
-  secureFile(paths.code);
-}
-
-/** Read and remove a code file. Invalid contents are discarded and not returned. */
-export function takeSmsCode(dataDir: string): string | null {
-  const paths = smsIpcPaths(dataDir);
-  if (!existsSync(paths.code)) return null;
-  let text = "";
-  try {
-    text = readFileSync(paths.code, "utf-8");
-  } catch {
-    return null;
-  }
-  rmSync(paths.code, { force: true });
-  try {
-    return normalizeSmsCode(text);
-  } catch {
-    return null;
-  }
-}
-
-export function writeCaptchaClicks(dataDir: string, spec: string): number {
-  const points = parseCaptchaClicks(spec);
-  const paths = smsIpcPaths(dataDir);
-  secureDirectory(dataDir);
-  secureDirectory(paths.dir);
-  secureDirectory(paths.clicksDir);
-  const name = `${Date.now()}-${randomBytes(4).toString("hex")}`;
-  const file = join(paths.clicksDir, name);
-  const body = points.map((point) => `${point.x},${point.y}`).join("\n") + "\n";
-  writeFileSync(file, body, { encoding: "utf-8", mode: 0o600 });
-  secureFile(file);
-  return points.length;
-}
-
-export function takeCaptchaClicks(dataDir: string): CaptchaPoint[] {
-  const paths = smsIpcPaths(dataDir);
-  if (!existsSync(paths.clicksDir)) return [];
-  const names = safeReaddir(paths.clicksDir).sort();
-  const points: CaptchaPoint[] = [];
-  for (const name of names) {
-    const file = join(paths.clicksDir, name);
-    let text = "";
-    try {
-      text = readFileSync(file, "utf-8");
-    } catch {
-      continue;
-    }
-    rmSync(file, { force: true });
-    for (const line of text.split(/\s+/)) {
-      if (!line) continue;
-      try {
-        points.push(...parseCaptchaClicks(line));
-      } catch {
-        // Ignore a malformed click file rather than logging its contents.
-      }
-    }
-  }
-  return points;
 }
 
 /** Strip digit runs so a server message cannot echo a phone or a code. */
@@ -242,13 +179,6 @@ export interface SmsFormStatus {
   phoneFilled: boolean;
   agreementChecked: boolean;
   sendVisible: boolean;
-}
-
-export interface PhoneLoginOptions {
-  phone: string;
-  areaCode: string;
-  timeoutMs: number;
-  dataDir: string;
 }
 
 export const PAGE_API = `(() => {
@@ -416,10 +346,44 @@ export const PAGE_API = `(() => {
   return true;
 })()`;
 
-interface TrafficHit {
-  url: string;
-  status: number;
-  body: unknown;
+export type SmsCommandResult =
+  | { status: "logged-in"; cookie: string }
+  | { status: "pending" }
+  | { status: "rejected"; reason: "code" | "incomplete" };
+
+export interface PhoneLoginOptions {
+  phone: string;
+  areaCode: string;
+  timeoutMs: number;
+  dataDir: string;
+  interactive: boolean;
+  chromePath?: string;
+}
+
+export interface CaptchaClickOptions {
+  spec: string;
+  timeoutMs: number;
+  dataDir: string;
+  chromePath?: string;
+}
+
+export type XueqiuFetch = typeof fetchXueqiu;
+
+const LOGIN_URL = `${XUEQIU_ORIGIN}/snb/provider/login`;
+
+type LoginHttpResult =
+  | { kind: "ok"; cookie: string }
+  | { kind: "register"; cookie: string }
+  | { kind: "reject"; message: string }
+  | { kind: "image-captcha"; message: string }
+  | { kind: "needs-browser"; message: string }
+  | { kind: "transport" }
+  | { kind: "error"; message: string };
+
+interface TrafficSnap {
+  xqGeetest: string;
+  geetest: SmsGeetestFields;
+  send: SendOutcome | null;
 }
 
 function pathnameOf(url: string): string {
@@ -430,45 +394,8 @@ function pathnameOf(url: string): string {
   }
 }
 
-function watchTraffic(session: CdpSession): { drain: () => Promise<TrafficHit[]> } {
-  const queue: { requestId: string; url: string; status: number }[] = [];
-  session.onEvent((method, params) => {
-    if (method !== "Network.responseReceived") return;
-    const url = String(params.response?.url || "");
-    const path = pathnameOf(url);
-    if (!/send_verification_code\.json$|\/snb\/provider\/login$|\/gee_test\/get$/.test(path)) return;
-    queue.push({
-      requestId: String(params.requestId),
-      url: path,
-      status: Number(params.response?.status || 0),
-    });
-  });
-  const seen = new Set<string>();
-  const attempts = new Map<string, number>();
-  return {
-    async drain() {
-      const batch = queue.splice(0);
-      const hits: TrafficHit[] = [];
-      for (const item of batch) {
-        if (seen.has(item.requestId)) continue;
-        try {
-          const result = await session.send("Network.getResponseBody", { requestId: item.requestId }, 8000);
-          seen.add(item.requestId);
-          const text = result.base64Encoded
-            ? Buffer.from(result.body, "base64").toString("utf8")
-            : String(result.body ?? "");
-          let body: unknown = null;
-          try { body = JSON.parse(text); } catch { body = null; }
-          hits.push({ url: item.url, status: item.status, body });
-        } catch {
-          const count = (attempts.get(item.requestId) ?? 0) + 1;
-          attempts.set(item.requestId, count);
-          if (count < 5) queue.push(item);
-        }
-      }
-      return hits;
-    },
-  };
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function evalValue<T>(session: CdpSession, expression: string): Promise<T> {
@@ -484,8 +411,86 @@ async function evalValue<T>(session: CdpSession, expression: string): Promise<T>
   return result.result?.value as T;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function watchSms(session: CdpSession): { drain: () => Promise<TrafficSnap> } {
+  let xqGeetest = "";
+  let geetest: SmsGeetestFields = {};
+  let send: SendOutcome | null = null;
+  const pendingResp: { requestId: string; url: string; status: number }[] = [];
+  const pendingReq: { requestId: string; postData: string }[] = [];
+
+  session.onEvent((method, params) => {
+    if (method === "Network.requestWillBeSent") {
+      const path = pathnameOf(String(params.request?.url || ""));
+      if (!path.endsWith("/account/sms/send_verification_code.json")) return;
+      pendingReq.push({
+        requestId: String(params.requestId),
+        postData: typeof params.request?.postData === "string" ? params.request.postData : "",
+      });
+      return;
+    }
+    if (method !== "Network.responseReceived") return;
+    const path = pathnameOf(String(params.response?.url || ""));
+    if (!/send_verification_code\.json$|\/gee_test\/get$/.test(path)) return;
+    pendingResp.push({
+      requestId: String(params.requestId),
+      url: path,
+      status: Number(params.response?.status || 0),
+    });
+  });
+
+  const seenResp = new Set<string>();
+  const seenReq = new Set<string>();
+  const respAttempts = new Map<string, number>();
+
+  return {
+    async drain() {
+      const requests = pendingReq.splice(0);
+      for (const item of requests) {
+        if (seenReq.has(item.requestId)) continue;
+        let post = item.postData;
+        if (!post) {
+          try {
+            const result = await session.send("Network.getRequestPostData", { requestId: item.requestId }, 8000);
+            post = String(result.postData || "");
+          } catch {
+            pendingReq.push(item);
+            continue;
+          }
+        }
+        seenReq.add(item.requestId);
+        const fields = geetestFromSendBody(parseSendPost(post));
+        if (fields.xqGeetest) xqGeetest = fields.xqGeetest;
+        geetest = { ...geetest, ...fields.geetest };
+      }
+
+      const responses = pendingResp.splice(0);
+      for (const item of responses) {
+        if (seenResp.has(item.requestId)) continue;
+        try {
+          const result = await session.send("Network.getResponseBody", { requestId: item.requestId }, 8000);
+          seenResp.add(item.requestId);
+          const text = result.base64Encoded
+            ? Buffer.from(result.body, "base64").toString("utf8")
+            : String(result.body ?? "");
+          let body: unknown = null;
+          try { body = JSON.parse(text); } catch { body = null; }
+          if (item.url.endsWith("/gee_test/get")) {
+            const record = body && typeof body === "object" ? body as Record<string, unknown> : null;
+            if (!xqGeetest && record && typeof record.xq_geetest === "string") xqGeetest = record.xq_geetest;
+            continue;
+          }
+          const classified = classifySendBody(body);
+          if (classified) send = classified;
+          else if (item.status >= 400) send = { ok: false, message: `Xueqiu refused the SMS request (HTTP ${item.status})` };
+        } catch {
+          const count = (respAttempts.get(item.requestId) ?? 0) + 1;
+          respAttempts.set(item.requestId, count);
+          if (count < 5) pendingResp.push(item);
+        }
+      }
+      return { xqGeetest, geetest: { ...geetest }, send };
+    },
+  };
 }
 
 async function connectWhenReady(cdpUrl: string): Promise<CdpSession> {
@@ -547,43 +552,50 @@ export async function preparePhoneForm(session: CdpSession, phone: string, areaC
   return status;
 }
 
-function attachStdinCodes(onCode: (code: string) => void): () => void {
-  const stdin = process.stdin;
-  if (!stdin || !stdin.readable) return () => {};
-  let buffer = "";
-  const onData = (chunk: string) => {
-    buffer += chunk;
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
+async function readDeviceInfo(session: CdpSession): Promise<{ secret: string; deviceId: string }> {
+  const deadline = Date.now() + 8000;
+  let last = "Xueqiu device info is missing";
+  while (Date.now() < deadline) {
+    const raw = await evalValue<string>(session, "localStorage.getItem('DEVICE_INFO') || ''");
+    if (raw) {
       try {
-        onCode(normalizeSmsCode(line));
-      } catch {
-        // Not a code. Ignore it and do not print the line.
+        return decryptDeviceInfo(raw);
+      } catch (error: any) {
+        last = error?.message || last;
       }
-      newline = buffer.indexOf("\n");
     }
-  };
-  stdin.setEncoding("utf8");
-  stdin.on("data", onData);
-  stdin.resume();
-  return () => {
-    stdin.off("data", onData);
-    stdin.pause();
-  };
+    await sleep(300);
+  }
+  throw new Error(last);
 }
 
-async function saveCaptchaPng(session: CdpSession, file: string): Promise<string> {
+async function readCookie(cdpUrl: string): Promise<string> {
+  const deadline = Date.now() + 8000;
+  let last = "No device_id cookie — page may not have loaded yet";
+  while (Date.now() < deadline) {
+    try {
+      return await getWafCookies(cdpUrl);
+    } catch (error: any) {
+      last = error?.message || last;
+    }
+    await sleep(400);
+  }
+  throw new Error(last);
+}
+
+async function saveCaptchaPng(session: CdpSession, dataDir: string): Promise<string> {
+  const paths = smsLoginPaths(dataDir);
+  secureDirectory(dataDir);
+  secureDirectory(paths.dir);
   const shot = await session.send("Page.captureScreenshot", { format: "png" });
-  mkdirSync(join(file, ".."), { recursive: true, mode: 0o700 });
-  writeFileSync(file, Buffer.from(shot.data, "base64"), { mode: 0o600 });
-  secureFile(file);
-  return file;
+  writeFileSync(paths.captcha, Buffer.from(shot.data, "base64"), { mode: 0o600 });
+  secureFile(paths.captcha);
+  return paths.captcha;
 }
 
-async function dispatchClicks(session: CdpSession, dataDir: string): Promise<void> {
-  for (const point of takeCaptchaClicks(dataDir)) {
+async function dispatchPoints(session: CdpSession, points: CaptchaPoint[]): Promise<void> {
+  try { await session.send("Page.bringToFront"); } catch { /* The click still targets this page. */ }
+  for (const point of points) {
     await session.send("Input.dispatchMouseEvent", {
       type: "mousePressed",
       x: point.x,
@@ -602,218 +614,452 @@ async function dispatchClicks(session: CdpSession, dataDir: string): Promise<voi
   }
 }
 
+/** Read one line from a TTY. Null means stdin closed or this is not a TTY. */
+export async function readPromptLine(prompt: string): Promise<string | null> {
+  if (!process.stdin.isTTY) return null;
+  process.stdout.write(`${prompt} `);
+  const stdin = process.stdin;
+  stdin.setEncoding("utf8");
+  return await new Promise((resolve) => {
+    let buf = "";
+    const cleanup = () => {
+      stdin.off("data", onData);
+      stdin.off("end", onEnd);
+      stdin.pause();
+    };
+    const onData = (chunk: string) => {
+      buf += chunk;
+      const newline = buf.indexOf("\n");
+      if (newline >= 0) {
+        cleanup();
+        resolve(buf.slice(0, newline).replace(/\r$/, ""));
+      }
+    };
+    const onEnd = () => {
+      cleanup();
+      const line = buf.replace(/\r$/, "").trim();
+      resolve(line ? line : null);
+    };
+    stdin.on("data", onData);
+    stdin.on("end", onEnd);
+    stdin.resume();
+  });
+}
+
+function draftSession(
+  phone: string,
+  areaCode: string,
+  phase: SmsSession["phase"],
+  cookie: string,
+  device: { secret: string; deviceId: string },
+  traffic: TrafficSnap,
+): SmsSession {
+  return {
+    version: 1,
+    createdAt: Date.now(),
+    phase,
+    areaCode,
+    phone,
+    maskedPhone: maskPhone(phone),
+    cookie,
+    deviceId: device.deviceId,
+    deviceSecret: device.secret,
+    xqGeetest: traffic.xqGeetest,
+    geetest: traffic.geetest,
+  };
+}
+
+interface DriveOptions {
+  cdpUrl: string;
+  phone: string;
+  areaCode: string;
+  timeoutMs: number;
+  dataDir: string;
+  chromePath?: string;
+  /** Prompt for click coordinates while the widget is open. */
+  interactiveClicks: boolean;
+  /** Applied once, to the widget this launch opens. */
+  presetClicks?: CaptchaPoint[];
+}
+
 /**
- * Full SMS login. Returns the cookie string once xq_is_login is set.
- * Prints SMS_SENT=1, CAPTCHA_REQUIRED=<path>, SMS_CODE_REJECTED=1, and SMS_ERROR=...
- * The caller prints LOGIN_OK=1 after the token file is saved.
+ * Send the SMS. The session file is on disk before this returns, and Chrome
+ * is stopped. "captcha-pending" means the PNG path was printed and the
+ * process should exit without a code prompt.
  */
-export async function runPhoneLogin(cdpUrl: string, options: PhoneLoginOptions): Promise<string> {
-  const phone = options.phone;
-  const areaCode = options.areaCode;
-  const secrets = [phone];
+async function driveUntilSmsSent(options: DriveOptions): Promise<"sent" | "captcha-pending"> {
   const deadline = Date.now() + options.timeoutMs;
-  const paths = prepareSmsIpc(options.dataDir);
-  const queued: string[] = [];
-  const stopStdin = attachStdinCodes((code) => queued.push(code));
+  const preset = options.presetClicks ?? [];
+  let page: CdpSession | null = null;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    try { page?.close(); } catch { /* already closed */ }
+    stopSnowballChrome();
+    stopStartedXvfb();
+  };
 
-  let session: CdpSession | null = null;
   try {
-    await getWafCookies(cdpUrl);
-    session = await connectWhenReady(cdpUrl);
-    const traffic = watchTraffic(session);
-    console.log(`  Opening the Xueqiu login modal for ${phoneLogLabel(areaCode, phone)}.`);
-    await preparePhoneForm(session, phone, areaCode);
+    await ensureChrome(options.cdpUrl, options.chromePath);
+    console.log("  Opening xueqiu.com...\n");
+    await openXueqiuTab(options.cdpUrl);
+    await readCookie(options.cdpUrl);
+    page = await connectWhenReady(options.cdpUrl);
+    const traffic = watchSms(page);
+    console.log(`  Opening the Xueqiu login modal for ${phoneLogLabel(options.areaCode, options.phone)}.`);
+    await preparePhoneForm(page, options.phone, options.areaCode);
+    const device = await readDeviceInfo(page);
+    const cookie = await readCookie(options.cdpUrl);
 
-    const clicked = await evalValue<{ ok: boolean }>(session, "window.__snowballSms.clickSend()");
+    const clicked = await evalValue<{ ok: boolean }>(page, "window.__snowballSms.clickSend()");
     if (!clicked.ok) throw new Error("Could not click 发送验证码");
 
-    const sent = await waitForSmsSend(session, traffic, paths.captcha, options.dataDir, deadline);
-    if (!sent.ok) throw new Error(sent.message);
-    console.log("SMS_SENT=1");
-    console.log(`  SMS sent to ${phoneLogLabel(areaCode, phone)}.`);
-    console.log("  From another shell: snowball login --sms-code <code>");
-    console.log("  That writes ~/.snowball-cli/sms-login/code (mode 0600). A code typed into this terminal is accepted too.");
+    const announced = new Set<string>();
+    const prompted = new Set<string>();
+    let presetUsed = false;
+    let captchaPrompts = 0;
+    let sawPanel = false;
+    const firstSlice = Math.min(deadline, Date.now() + 20000);
 
-    return await waitForLogin(session, traffic, paths.captcha, options.dataDir, deadline, queued, secrets, cdpUrl);
-  } catch (error: any) {
-    throw new Error(scrubSecrets(error?.message || "SMS login failed", secrets));
+    const persist = async (phase: SmsSession["phase"], snap: TrafficSnap) => {
+      let current = cookie;
+      try {
+        current = await getWafCookies(options.cdpUrl);
+      } catch {
+        // Keep the cookie captured before the click.
+      }
+      saveSmsSession(options.dataDir, draftSession(options.phone, options.areaCode, phase, current, device, snap));
+    };
+
+    while (Date.now() < deadline) {
+      const snap = await traffic.drain();
+      if (snap.send?.ok) {
+        await persist("sent", snap);
+        return "sent";
+      }
+      if (snap.send && !snap.send.ok) throw new Error(snap.send.message);
+
+      const panel = await evalValue<{ open: boolean; marker: string }>(page, "window.__snowballSms.geetest()");
+      if (panel.open) {
+        sawPanel = true;
+        const marker = panel.marker || "panel";
+        if (!announced.has(marker)) {
+          announced.add(marker);
+          const png = await saveCaptchaPng(page, options.dataDir);
+          console.log(`CAPTCHA_REQUIRED=${png}`);
+          await persist("captcha", snap);
+          if (!options.interactiveClicks && preset.length === 0) {
+            console.log("  Session saved. Finish GeeTest with: snowball login --captcha-click x,y");
+            return "captcha-pending";
+          }
+        }
+        if (preset.length > 0 && !presetUsed) {
+          presetUsed = true;
+          await dispatchPoints(page, preset);
+        } else if (options.interactiveClicks && !prompted.has(marker)) {
+          prompted.add(marker);
+          captchaPrompts += 1;
+          if (captchaPrompts > 6) {
+            throw new Error("GeeTest was not solved. The session is saved; run snowball login --captcha-click x,y");
+          }
+          const line = await readPromptLine(CAPTCHA_CLICK_PROMPT);
+          if (line === null) {
+            console.log("  stdin closed. Finish GeeTest with: snowball login --captcha-click x,y");
+            return "captcha-pending";
+          }
+          let points: CaptchaPoint[];
+          try {
+            points = parseCaptchaClicks(line);
+          } catch (error: any) {
+            prompted.delete(marker);
+            console.error(`  ${error?.message || "Could not read the click coordinates"}`);
+            continue;
+          }
+          await dispatchPoints(page, points);
+          const until = Date.now() + 3000;
+          while (Date.now() < until) {
+            const after = await traffic.drain();
+            if (after.send?.ok) {
+              await persist("sent", after);
+              return "sent";
+            }
+            if (after.send && !after.send.ok) throw new Error(after.send.message);
+            await sleep(200);
+          }
+          const still = await evalValue<{ open: boolean; marker: string }>(page, "window.__snowballSms.geetest()");
+          if (still.open) prompted.delete(still.marker || marker);
+        }
+      }
+
+      const toast = await evalValue<string>(page, "window.__snowballSms.toast()");
+      if (toast && !panel.open) throw new Error(toast);
+
+      if (!sawPanel && Date.now() >= firstSlice) {
+        const late = await traffic.drain();
+        if (late.send?.ok) {
+          await persist("sent", late);
+          return "sent";
+        }
+        if (late.send && !late.send.ok) throw new Error(late.send.message);
+        const latePanel = await evalValue<{ open: boolean }>(page, "window.__snowballSms.geetest()");
+        if (!latePanel.open) {
+          throw new Error("发送验证码 did not reach Xueqiu, and no GeeTest challenge appeared");
+        }
+      }
+      await sleep(300);
+    }
+    throw new Error(sawPanel
+      ? "Timed out waiting for the GeeTest challenge before the SMS could be sent"
+      : "Timed out waiting for Xueqiu to send the SMS");
   } finally {
-    stopStdin();
-    session?.close();
+    release();
   }
 }
 
-async function announceCaptcha(session: CdpSession, file: string, seen: Set<string>, marker: string): Promise<void> {
-  if (seen.has(marker)) return;
-  seen.add(marker);
-  const path = await saveCaptchaPng(session, file);
-  console.log(`CAPTCHA_REQUIRED=${path}`);
-  console.log("  GeeTest is showing. Solve it in the browser, or click the screenshot from another shell:");
-  console.log("  snowball login --captcha-click x,y");
-  console.log("  Coordinates are pixels in that PNG (top-left origin). Repeat for each click, including 确认.");
+function cookieFromPayload(data: unknown): string {
+  if (!data || typeof data !== "object") return "";
+  const record = data as Record<string, unknown>;
+  if (typeof record.cookie === "string") return record.cookie;
+  const pairs: string[] = [];
+  for (const key of ["xq_is_login", "xq_a_token", "u", "xq_id_token"]) {
+    const value = record[key];
+    if (typeof value === "string" || typeof value === "number") pairs.push(`${key}=${value}`);
+  }
+  return pairs.join("; ");
 }
 
-async function waitForSmsSend(
-  session: CdpSession,
-  traffic: { drain: () => Promise<TrafficHit[]> },
-  captchaFile: string,
-  dataDir: string,
-  deadline: number,
-): Promise<SendOutcome> {
-  const announced = new Set<string>();
-  let sawChallenge = false;
-  const firstSlice = Math.min(deadline, Date.now() + 20000);
-  while (Date.now() < firstSlice) {
-    const read = await readSendHits(traffic);
-    if (read.challenge) sawChallenge = true;
-    if (read.send) return read.send;
-    const panel = await evalValue<{ open: boolean; marker: string }>(session, "window.__snowballSms.geetest()");
-    if (panel.open) {
-      sawChallenge = true;
-      await announceCaptcha(session, captchaFile, announced, panel.marker || "panel");
-      break;
+function absorbLoginPayload(cookie: string, body: unknown, secret: string): string {
+  if (hasLoginCookie(cookie)) return cookie;
+  if (!body || typeof body !== "object" || !secret) return cookie;
+  const data = (body as { data?: unknown }).data;
+  if (typeof data !== "string" || !data) return cookie;
+  try {
+    const decoded = JSON.parse(decryptXueqiu(data, secret));
+    return mergeCookies(cookie, cookieFromPayload(decoded));
+  } catch {
+    return cookie;
+  }
+}
+
+async function postOnce(
+  session: SmsSession,
+  code: string,
+  isRegister: boolean,
+  fetchImpl: XueqiuFetch,
+  preferred: { index: number },
+): Promise<LoginHttpResult> {
+  const hex = encryptXueqiu(JSON.stringify(buildLoginPlain(session, code, isRegister)));
+  const bodies = loginRequestBodies(hex);
+  let cookie = session.cookie;
+  let last: LoginHttpResult = { kind: "transport" };
+  for (let offset = 0; offset < bodies.length; offset++) {
+    const index = (preferred.index + offset) % bodies.length;
+    const spec = bodies[index];
+    let posted: { response: Response; cookie: string };
+    try {
+      posted = await fetchImpl(LOGIN_URL, cookie, {
+        method: "POST",
+        headers: { "Content-Type": spec.contentType },
+        body: spec.body,
+      });
+    } catch (error: any) {
+      throw new Error(error?.message || "Xueqiu login request failed");
     }
-    const toast = await evalValue<string>(session, "window.__snowballSms.toast()");
-    if (toast) return { ok: false, message: toast };
-    await sleep(300);
-  }
-
-  if (!sawChallenge && Date.now() >= firstSlice) {
-    const late = await readSendHits(traffic);
-    if (late.send) return late.send;
-    const panel = await evalValue<{ open: boolean }>(session, "window.__snowballSms.geetest()");
-    if (!panel.open) {
-      return { ok: false, message: "发送验证码 did not reach Xueqiu, and no GeeTest challenge appeared" };
-    }
-    sawChallenge = true;
-  }
-
-  while (Date.now() < deadline) {
-    const panel = await evalValue<{ open: boolean; marker: string }>(session, "window.__snowballSms.geetest()");
-    if (panel.open) await announceCaptcha(session, captchaFile, announced, panel.marker || "panel");
-    if (panel.open) await dispatchClicks(session, dataDir);
-    const read = await readSendHits(traffic);
-    if (read.send) return read.send;
-    const toast = await evalValue<string>(session, "window.__snowballSms.toast()");
-    if (toast && !panel.open) return { ok: false, message: toast };
-    await sleep(300);
-  }
-  return { ok: false, message: "Timed out waiting for the GeeTest challenge before the SMS could be sent" };
-}
-
-async function readSendHits(
-  traffic: { drain: () => Promise<TrafficHit[]> },
-): Promise<{ send: SendOutcome | null; challenge: boolean }> {
-  let send: SendOutcome | null = null;
-  let challenge = false;
-  for (const hit of await traffic.drain()) {
-    if (hit.url.endsWith("/gee_test/get")) {
-      if (geeTestRequiresChallenge(hit.body)) challenge = true;
+    cookie = posted.cookie;
+    const raw = await posted.response.text();
+    let json: unknown = null;
+    try { json = raw ? JSON.parse(raw) : null; } catch { json = null; }
+    const outcome = classifyLoginBody(json);
+    if (!outcome) {
+      last = { kind: "transport" };
       continue;
     }
-    if (!hit.url.endsWith("/account/sms/send_verification_code.json")) continue;
-    const classified = classifySendBody(hit.body);
-    if (classified) send = classified;
-    else if (hit.status >= 400) send = { ok: false, message: `Xueqiu refused the SMS request (HTTP ${hit.status})` };
+    if (outcome.kind === "reject" && looksLikeBodyMismatch(outcome.message)) {
+      last = { kind: "reject", message: outcome.message };
+      continue;
+    }
+    preferred.index = index;
+    if (outcome.kind === "ok") {
+      const next = absorbLoginPayload(cookie, json, session.deviceSecret);
+      if (!hasLoginCookie(next)) {
+        return { kind: "needs-browser", message: "Xueqiu accepted the login response but did not set xq_is_login" };
+      }
+      return { kind: "ok", cookie: next };
+    }
+    if (outcome.kind === "register") return { kind: "register", cookie };
+    if (outcome.kind === "image-captcha") return { kind: "image-captcha", message: outcome.message };
+    return { kind: "reject", message: outcome.message };
   }
-  return { send, challenge };
+  return last.kind === "reject" ? last : { kind: "transport" };
 }
 
-async function waitForLogin(
-  session: CdpSession,
-  traffic: { drain: () => Promise<TrafficHit[]> },
-  captchaFile: string,
-  dataDir: string,
-  deadline: number,
-  queued: string[],
-  secrets: string[],
-  cdpUrl: string,
-): Promise<string> {
-  const announced = new Set<string>();
-  let submitting = false;
-  let sawRegister = false;
-  let registerAt = 0;
-  let submitAt = 0;
-
-  while (Date.now() < deadline) {
-    const fromFile = takeSmsCode(dataDir);
-    if (fromFile) queued.push(fromFile);
-
-    const panel = await evalValue<{ open: boolean; marker: string }>(session, "window.__snowballSms.geetest()");
-    if (panel.open) {
-      await announceCaptcha(session, captchaFile, announced, panel.marker || "login-panel");
-      await dispatchClicks(session, dataDir);
-    }
-
-    if (!submitting && queued.length > 0 && !panel.open) {
-      const code = queued.shift()!;
-      secrets.push(code);
-      const filled = await evalValue<{ ok: boolean }>(session, `window.__snowballSms.setCode(${JSON.stringify(code)})`);
-      if (!filled.ok) throw new Error("Could not fill the verification code");
-      const clicked = await evalValue<{ ok: boolean }>(session, "window.__snowballSms.clickLogin()");
-      if (!clicked.ok) throw new Error("Could not click 登录");
-      submitting = true;
-      submitAt = Date.now();
-      sawRegister = false;
-    }
-
-    for (const hit of await traffic.drain()) {
-      if (!hit.url.endsWith("/snb/provider/login")) continue;
-      const outcome = classifyLoginBody(hit.body);
-      if (!outcome) continue;
-      if (outcome.kind === "register") {
-        sawRegister = true;
-        registerAt = Date.now();
-        continue;
-      }
-      if (outcome.kind === "ok") {
-        const cookie = await waitForLoginCookie(cdpUrl);
-        if (!cookie) throw new Error("Xueqiu accepted the login but xq_is_login was not set");
-        return cookie;
-      }
-      if (outcome.kind === "image-captcha") {
-        await announceCaptcha(session, captchaFile, announced, `image-${Date.now()}`);
-      }
-      console.log("SMS_CODE_REJECTED=1");
-      console.log(`SMS_ERROR=${outcome.message}`);
-      submitting = false;
-      sawRegister = false;
-    }
-
-    if (submitting && sawRegister && !panel.open && Date.now() - registerAt > 8000) {
-      const again = await evalValue<{ ok: boolean }>(session, "window.__snowballSms.clickLogin()");
-      if (!again.ok) throw new Error("Xueqiu returned 20099 but the register resubmit could not be clicked");
-      sawRegister = false;
-      registerAt = Date.now();
-    } else if (submitting && !sawRegister && !panel.open && submitAt && Date.now() - submitAt > 20000) {
-      console.log("SMS_CODE_REJECTED=1");
-      console.log("SMS_ERROR=Timed out waiting for Xueqiu to accept the code");
-      submitting = false;
-      submitAt = 0;
-    }
-    await sleep(300);
+export async function submitSmsLogin(
+  session: SmsSession,
+  code: string,
+  fetchImpl: XueqiuFetch = fetchXueqiu,
+): Promise<Exclude<LoginHttpResult, { kind: "register" }>> {
+  const preferred = { index: 0 };
+  const first = await postOnce(session, code, false, fetchImpl, preferred);
+  if (first.kind !== "register") return first;
+  const second = await postOnce({ ...session, cookie: first.cookie }, code, true, fetchImpl, preferred);
+  if (second.kind === "register") {
+    return { kind: "error", message: "Xueqiu still returned 20099 after registering" };
   }
-  throw new Error("Timed out waiting for the SMS code");
+  return second;
 }
 
-async function waitForLoginCookie(cdpUrl: string): Promise<string | null> {
-  const deadline = Date.now() + 8000;
-  while (Date.now() < deadline) {
+function assertSendable(session: SmsSession): void {
+  if (!session.deviceSecret || !session.deviceId) {
+    throw new Error("The SMS session is missing Xueqiu device info. Run snowball login --phone again.");
+  }
+}
+
+function assertFresh(session: SmsSession, dataDir: string): void {
+  if (Date.now() - session.createdAt >= SMS_SESSION_TTL_MS) {
+    clearSmsSession(dataDir);
+    throw new Error(sessionProblemMessage("expired"));
+  }
+}
+
+async function settleLogin(session: SmsSession, code: string, dataDir: string, fetchImpl: XueqiuFetch): Promise<SmsCommandResult> {
+  assertFresh(session, dataDir);
+  assertSendable(session);
+  const outcome = await submitSmsLogin(session, code, fetchImpl);
+  if (outcome.kind === "ok") {
+    clearSmsSession(dataDir);
+    return { status: "logged-in", cookie: outcome.cookie };
+  }
+  if (outcome.kind === "needs-browser" || outcome.kind === "error") {
+    console.log(`SMS_ERROR=${safeServerMessage(outcome.message)}`);
+    return { status: "rejected", reason: "incomplete" };
+  }
+  if (outcome.kind === "transport") {
+    throw new Error("Xueqiu rejected the login request. The SMS session is still saved.");
+  }
+  console.log("SMS_CODE_REJECTED=1");
+  console.log(`SMS_ERROR=${safeServerMessage(outcome.message)}`);
+  return { status: "rejected", reason: "code" };
+}
+
+async function promptForCode(session: SmsSession, dataDir: string, secrets: string[]): Promise<SmsCommandResult> {
+  let attempts = 0;
+  while (attempts < SMS_CODE_ATTEMPTS) {
+    const line = await readPromptLine(SMS_CODE_PROMPT);
+    if (line === null) {
+      console.log("  stdin closed. Finish with: snowball login --sms-code <code>");
+      return { status: "pending" };
+    }
+    let code: string;
     try {
-      const cookie = await getWafCookies(cdpUrl);
-      if (hasLoginCookie(cookie)) return cookie;
-    } catch {
-      // The page may still be applying Set-Cookie.
+      code = normalizeSmsCode(line);
+    } catch (error: any) {
+      console.error(`  ${error?.message || "SMS code must be 4 to 8 digits"}`);
+      continue;
     }
-    await sleep(400);
+    secrets.push(code);
+    attempts += 1;
+    let settled: SmsCommandResult;
+    try {
+      settled = await settleLogin(session, code, dataDir, fetchXueqiu);
+    } catch (error: any) {
+      throw new Error(scrubSecrets(error?.message || "SMS login failed", secrets));
+    }
+    if (settled.status !== "rejected" || settled.reason !== "code") return settled;
+    if (attempts >= SMS_CODE_ATTEMPTS) {
+      console.error(`  The code was rejected ${SMS_CODE_ATTEMPTS} times. The session is still saved; run snowball login --sms-code <code> within 10 minutes.`);
+      return settled;
+    }
   }
-  return null;
+  return { status: "rejected", reason: "code" };
 }
 
-function safeReaddir(dir: string): string[] {
+function scrubbed<T>(secrets: string[], fn: () => Promise<T>): Promise<T> {
+  return fn().catch((error: any) => {
+    throw new Error(scrubSecrets(error?.message || "SMS login failed", secrets));
+  });
+}
+
+/**
+ * Send an SMS, then either prompt for the code or leave the session on disk.
+ * Chrome is stopped before the code prompt.
+ */
+export async function runPhoneLogin(cdpUrl: string, options: PhoneLoginOptions): Promise<SmsCommandResult> {
+  const secrets = [options.phone];
+  return scrubbed(secrets, async () => {
+    const driven = await driveUntilSmsSent({
+      cdpUrl,
+      phone: options.phone,
+      areaCode: options.areaCode,
+      timeoutMs: options.timeoutMs,
+      dataDir: options.dataDir,
+      chromePath: options.chromePath,
+      interactiveClicks: options.interactive,
+    });
+    if (driven === "captcha-pending") return { status: "pending" };
+    const loaded = loadSmsSession(options.dataDir);
+    if (!loaded.ok || loaded.session.phase !== "sent") {
+      throw new Error("The SMS was sent but the session file could not be read.");
+    }
+    console.log("SMS_SENT=1");
+    console.log(`  SMS sent to ${phoneLogLabel(options.areaCode, options.phone)}.`);
+    if (!options.interactive) {
+      console.log("  Session saved. Finish with: snowball login --sms-code <code>");
+      return { status: "pending" };
+    }
+    return promptForCode(loaded.session, options.dataDir, secrets);
+  });
+}
+
+/** Apply coordinates to a fresh GeeTest widget, send the SMS, and exit. */
+export async function runCaptchaClick(cdpUrl: string, options: CaptchaClickOptions): Promise<SmsCommandResult> {
+  const points = parseCaptchaClicks(options.spec);
+  const loaded = loadSmsSession(options.dataDir);
+  if (!loaded.ok) throw new Error(sessionProblemMessage(loaded.reason));
+  if (loaded.session.phase === "sent") {
+    throw new Error("The SMS was already sent. Run snowball login --sms-code <code>.");
+  }
+  const session = loaded.session;
+  const secrets = [session.phone];
+  return scrubbed(secrets, async () => {
+    const driven = await driveUntilSmsSent({
+      cdpUrl,
+      phone: session.phone,
+      areaCode: session.areaCode,
+      timeoutMs: options.timeoutMs,
+      dataDir: options.dataDir,
+      chromePath: options.chromePath,
+      interactiveClicks: false,
+      presetClicks: points,
+    });
+    if (driven === "captcha-pending") {
+      throw new Error("GeeTest is still required. Run snowball login --captcha-click with coordinates from the new PNG.");
+    }
+    const sent = loadSmsSession(options.dataDir);
+    if (!sent.ok || sent.session.phase !== "sent") {
+      throw new Error("The SMS was sent but the session file could not be read.");
+    }
+    console.log("SMS_SENT=1");
+    console.log(`  SMS sent to ${phoneLogLabel(sent.session.areaCode, sent.session.phone)}.`);
+    console.log("  Session saved. Finish with: snowball login --sms-code <code>");
+    return { status: "pending" };
+  });
+}
+
+/** Finish a login from the session file. A wrong code leaves the file in place. */
+export async function completeSavedLogin(
+  dataDir: string,
+  rawCode: string,
+  fetchImpl: XueqiuFetch = fetchXueqiu,
+): Promise<SmsCommandResult> {
+  const code = normalizeSmsCode(rawCode);
+  const loaded = loadSmsSession(dataDir);
+  if (!loaded.ok) throw new Error(sessionProblemMessage(loaded.reason));
+  if (loaded.session.phase !== "sent") throw new Error(captchaPhaseMessage());
+  const secrets = [loaded.session.phone, code];
   try {
-    return readdirSync(dir);
-  } catch {
-    return [];
+    return await settleLogin(loaded.session, code, dataDir, fetchImpl);
+  } catch (error: any) {
+    throw new Error(scrubSecrets(error?.message || "SMS login failed", secrets));
   }
 }

@@ -14,20 +14,24 @@ snowball login --qr-png /tmp/xq.png     # 写出 PNG，打印 QR_PNG=路径，�
 snowball login --timeout 900            # 整段等待秒数，默认 600。过期会覆盖同一张 PNG 并再打印 QR_PNG=
 snowball login --manual                 # 在 Chrome 窗口中扫码（有 TTY 时按回车）
 snowball login --chrome /path/to/chrome # 指定浏览器路径
-snowball login --phone 13800138000      # 短信验证码登录，默认区号 86
+snowball login --phone 13800138000      # 短信验证码登录，默认区号 86，接着提示输入验证码
 snowball login --phone 12345678 --area-code 45
-snowball login --sms-code 123456        # 另一个进程把验证码交给正在等待的登录
-snowball login --captcha-click 120,80   # GeeTest 截图上的像素坐标
+snowball login --phone 13800138000 --no-wait
+snowball login --sms-code 123456        # 用已保存的会话完成登录
+snowball login --captcha-click 120,80   # 用新的 GeeTest 窗口按截图像素点击并发出短信
+snowball login --help                   # 只打印用法，不会打开 Chrome
 ```
 
 没有雪球 App 时用 `--phone`。命令会打开 www.xueqiu.com 的「验证码登录」，勾选协议，点击「发送验证码」。
 
-- 发出短信后打印 `SMS_SENT=1`，然后一直等到 `--timeout`（默认 600 秒）。
-- GeeTest（接口 `available: 1`）出现时保存截图并打印 `CAPTCHA_REQUIRED=<路径>`，进程继续等。可以用 `--captcha-click x,y` 按截图像素点击，多次点击就多执行几次，或用分号连起来。
-- 另一个 shell 执行 `--sms-code <验证码>`，写入 `~/.snowball-cli/sms-login/code`（目录 `0700`，文件 `0600`）。等待进程的 stdin 有一行数字时也会读。
-- 验证码错误或过期打印 `SMS_CODE_REJECTED=1` 和 `SMS_ERROR=...`，超时前可以再交一次。
-- 雪球返回 20099 时，页面会像网页端一样带 `is_register=1` 再提交一次（自动注册）。
+- 短信一发出就写入 `~/.snowball-cli/sms-login/session.json`（目录 `0700`，文件 `0600`），然后关掉本次的 Chrome 和 Xvfb。
+- 有 TTY 时接着提示 `请输入短信验证码:`，在同一条命令里完成登录。验证码错了会再问几次，不会重新发短信。
+- stdin 不是 TTY，或加了 `--no-wait`：打印 `SMS_SENT=1` 后退出。`snowball login --sms-code <验证码>` 读取刚才的会话完成登录。交互进程在发码之后被杀掉也一样，不要为了补交验证码而重新发短信。
+- GeeTest（接口 `available: 1`）在有 TTY 时保存截图、打印 `CAPTCHA_REQUIRED=<路径>`，并提示 `请输入点击坐标 (x,y;x,y):`。没有 TTY 时打印路径后退出；`--captcha-click` 会重新打开验证码并点击（坐标要对应新的图）。
+- 验证码错误或过期打印 `SMS_CODE_REJECTED=1` 和 `SMS_ERROR=...`，会话还在，10 分钟内可以再执行 `--sms-code`。
+- 雪球返回 20099 时会带 `is_register=1` 再提交一次（自动注册）。
 - 只有 cookie 里有 `xq_is_login` 才打印 `LOGIN_OK=1` 并保存 token。手机号只以 `138****8000` 这种形式出现，不打印验证码和 cookie。
+- `snowball login --help` 和 `-h` 只打印说明，不会启动登录。
 
 浏览器查找顺序：`CHROME_PATH` 环境变量 → `--chrome` 参数 → Chrome → Chromium → 平台默认路径。
 

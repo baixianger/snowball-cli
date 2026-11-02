@@ -42,32 +42,37 @@ bun add -g snowball-cli
 
 用户没有雪球 App 时，用手机号 + 短信验证码，不要走二维码。默认区号是中国 +86，丹麦号码加 `--area-code 45`。
 
+有 TTY 时一条命令走完：
+
 ```bash
 snowball login --phone 13800138000 --area-code 86
 ```
 
-这条命令会拉起 Chrome（没有 DISPLAY 时用 Xvfb），打开雪球登录框，勾选协议并点击「发送验证码」，然后一直阻塞到 `--timeout`（默认 600 秒）。
+它会拉起 Chrome（没有 DISPLAY 时用 Xvfb），打开发码框，发出短信，然后提示 `请输入短信验证码:`。把用户回复的数字写进这个进程的 stdin。验证码错了会再提示，不要重新执行 `--phone`（雪球会限流「请求过于频繁」）。出现 GeeTest 时会打印 `CAPTCHA_REQUIRED=<png>` 并提示 `请输入点击坐标 (x,y;x,y):`，坐标是这张图的像素（左上角为原点），此时验证码窗口还开着。
 
-看 stdout 里的这几行：
+没有 TTY，或你不能一直占着这个进程时，加上 `--no-wait`（stdin 被关掉时也会自动走这条）：
 
-- `SMS_SENT=1` — 验证码已发出。向用户要短信里的数字，再用**另一个 shell** 交给正在等待的进程：
+```bash
+snowball login --phone 13800138000 --no-wait
+```
 
-  ```bash
-  snowball login --sms-code 123456
-  ```
+短信发出后会话写在 `~/.snowball-cli/sms-login/session.json`（目录 `0700`，文件 `0600`），Chrome 和 Xvfb 会退出，stdout 有 `SMS_SENT=1`。向用户要到验证码之后：
 
-  这会把验证码写入 `~/.snowball-cli/sms-login/code`（目录 `0700`，文件 `0600`）。不要把验证码写进日志。等待中的进程如果 stdin 是终端或管道，也可以直接读一行验证码。
-- `CAPTCHA_REQUIRED=/path/captcha.png` — 雪球弹出了 GeeTest。把这张图发给用户。坐标是图里的像素（左上角为原点）。用户指出要点哪里之后：
+```bash
+snowball login --sms-code 123456
+```
 
-  ```bash
-  snowball login --captcha-click 120,80
-  ```
+不要把验证码写进日志。如果交互进程在 `SMS_SENT=1` 之后被杀掉，同样用 `--sms-code`，不要重新发短信。验证码错了会打印 `SMS_CODE_REJECTED=1` 和 `SMS_ERROR=...`，会话还在，10 分钟内可以再交一次。
 
-  每个点击一次，包括最后的「确认」。可以写成 `120,80;340,520`。
-- `SMS_CODE_REJECTED=1` 和 `SMS_ERROR=...` — 验证码错了或过期了。再向用户要一次，重新执行 `--sms-code`。原来的进程还在等。
-- `LOGIN_OK=1` — 已经拿到 `xq_is_login` 并写好 `token.json`。
+没有 TTY 时如果先出现 `CAPTCHA_REQUIRED=/path/captcha.png`，命令会退出且短信还没发。把图发给用户，拿到坐标后：
 
-日志里的手机号是打码的（`138****8000`）。不要打印完整号码、验证码或 cookie。
+```bash
+snowball login --captcha-click 120,80
+```
+
+这会打开一个**新的** GeeTest。坐标对不上新图时，用新打印的 `CAPTCHA_REQUIRED=` 再来一次。多个点用分号：`120,80;340,520`，最后一点通常是「确认」。
+
+`LOGIN_OK=1` 表示已经拿到 `xq_is_login` 并写好 `token.json`。日志里的手机号是打码的（`138****8000`）。不要打印完整号码、验证码或 cookie。`snowball login --help` 只打印用法，不会启动 Chrome。
 
 用户有雪球 App、更想扫码时，在 Linux 服务器上：
 
@@ -204,7 +209,7 @@ snowball profile <ID>
 
 ## 常见问题
 
-- **「Not logged in」** — 没有雪球 App 时用 `snowball login --phone <号码>`，再按 `SMS_SENT=1` / `CAPTCHA_REQUIRED=` / `--sms-code` 往下做。有 App 时用 `snowball login --qr-png <文件>`。不要编造 cookie
+- **「Not logged in」** — 没有雪球 App 时用 `snowball login --phone <号码>`（无 TTY 加 `--no-wait`，再用 `--sms-code`）。有 App 时用 `snowball login --qr-png <文件>`。不要编造 cookie
 - **HTTP 400 on query-qr-code-state** — 轮询必须打 `www.xueqiu.com`。apex 的 301 会让 fetch 丢掉 Cookie
 - **HTTP 403 / WAF** — 等几分钟或重新登录。无头 Chrome 拿不到 WAF cookie，改用 Xvfb
 - **Chrome failed to start** — Linux 需要 `--no-sandbox`（CLI 已加）并清掉 profile 里的 Singleton 锁；或设置 `CHROME_PATH` / `--chrome`

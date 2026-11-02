@@ -13,14 +13,15 @@ import {
   verifyToken,
 } from "./lib/auth";
 import { qrLogin, hasLoginCookie, getWafCookies, parseLoginTimeoutMs } from "./lib/qr-terminal";
-import { ensureChrome, openXueqiuTab, stopStartedXvfb } from "./lib/browser";
+import { armSmsProcessCleanup, ensureChrome, openXueqiuTab, stopSnowballChrome, stopStartedXvfb } from "./lib/browser";
 import {
+  completeSavedLogin,
   normalizeAreaCode,
   normalizePhone,
-  parseCaptchaClicks,
+  runCaptchaClick,
   runPhoneLogin,
-  writeCaptchaClicks,
-  writeSmsCode,
+  shouldPromptForSms,
+  type SmsCommandResult,
 } from "./lib/sms";
 import * as api from "./lib/api";
 
@@ -116,6 +117,43 @@ async function waitForManualLogin(cdpUrl: string, timeoutMs: number): Promise<st
   throw new Error("Timed out waiting for Xueqiu login (stdin is not a TTY).");
 }
 
+function loginHelpText(): string {
+  return `
+  snowball login — Xueqiu login
+
+  snowball login
+  snowball login --qr-png <file.png> [--timeout 600]
+  snowball login --manual [--timeout 600]
+  snowball login --phone <number> [--area-code 86] [--no-wait] [--timeout 600]
+  snowball login --sms-code <code>
+  snowball login --captcha-click <x,y[;x,y]>
+
+  --phone sends an SMS, then prompts 请输入短信验证码:.
+  A wrong code prompts again and does not send another SMS.
+  GeeTest saves a PNG and prompts 请输入点击坐标 (x,y;x,y): while the widget is open.
+
+  With no TTY, or with --no-wait, the command saves ~/.snowball-cli/sms-login/session.json
+  (directory 0700, file 0600), prints SMS_SENT=1 or CAPTCHA_REQUIRED=<png>, and exits.
+  snowball login --sms-code <code> finishes that saved session.
+  If this process is killed after the SMS was sent, --sms-code still works.
+  The session expires after 10 minutes. A wrong code leaves it in place.
+
+  --help prints this text and does not start Chrome.
+`.replace(/^\n/, "");
+}
+
+/** Returns a process exit code. 1 means the SMS was rejected or did not finish. */
+async function finishSms(result: SmsCommandResult): Promise<number> {
+  if (result.status === "logged-in") {
+    saveToken({ cookie: result.cookie, extractedAt: new Date().toISOString(), source: "chrome-sms" });
+    console.log("LOGIN_OK=1");
+    console.log("\n  ✓ Login successful! Token saved.\n");
+    console.log("  Try: snowball quote SH600519\n");
+    return 0;
+  }
+  return result.status === "rejected" ? 1 : 0;
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  Command registry
 // ═══════════════════════════════════════════════════════════════
@@ -131,9 +169,14 @@ const commands: Record<string, Record<string, Command>> = {
   // ── Auth ──────────────────────────────────────────────────────
   "Auth": {
     login: {
-      usage: "login [--phone <number>] [--area-code <code>] [--sms-code <code>] [--captcha-click <x,y>] [--qr-png <path>] [--timeout <sec>]",
-      desc: "QR login, or phone + SMS (code from another shell)",
+      usage: "login [--phone <n>] [--sms-code <c>] [--qr-png <path>] [--timeout <sec>]",
+      desc: "QR login, or phone + SMS (prompts, or --no-wait)",
       run: async () => {
+        if (process.argv.includes("--help") || process.argv.includes("-h")) {
+          console.log(loginHelpText());
+          return;
+        }
+
         const qrPng = flag("qr-png");
         const phoneRaw = flag("phone");
         const smsCode = flag("sms-code");
@@ -160,23 +203,12 @@ const commands: Record<string, Record<string, Command>> = {
           process.exit(1);
         }
         if ((smsCode || captchaClick) && (phoneRaw || hasFlag("manual") || qrPng)) {
-          console.error("\n  Run --sms-code and --captcha-click in a separate snowball login command.\n");
+          console.error("\n  Run --sms-code and --captcha-click in their own snowball login command.\n");
           process.exit(1);
         }
         if (smsCode && captchaClick) {
           console.error("\n  Pass --sms-code and --captcha-click as separate commands.\n");
           process.exit(1);
-        }
-        if (smsCode) {
-          writeSmsCode(DATA_DIR, smsCode);
-          console.log("SMS_CODE_WRITTEN=1");
-          return;
-        }
-        if (captchaClick) {
-          parseCaptchaClicks(captchaClick);
-          const count = writeCaptchaClicks(DATA_DIR, captchaClick);
-          console.log(`CAPTCHA_CLICK=${count}`);
-          return;
         }
 
         const timeoutRaw = flag("timeout");
@@ -202,45 +234,66 @@ const commands: Record<string, Record<string, Command>> = {
           phone = normalizePhone(phoneRaw, areaCode);
         }
 
-        showLogo();
-        console.log("  Snowball CLI — Login\n");
-
+        const chromePath = flag("chrome") ?? process.env.CHROME_PATH;
+        let sms = false;
+        let exitCode = 0;
         try {
-          await ensureChrome(CDP_URL, flag("chrome") ?? process.env.CHROME_PATH);
-          console.log("  Opening xueqiu.com...\n");
-          await openXueqiuTab(CDP_URL);
-
-          if (phone && areaCode) {
-            const cookie = await runPhoneLogin(CDP_URL, {
+          if (smsCode || captchaClick || phone) {
+            sms = true;
+            armSmsProcessCleanup();
+          }
+          if (smsCode) {
+            exitCode = await finishSms(await completeSavedLogin(DATA_DIR, smsCode));
+          } else if (captchaClick) {
+            exitCode = await finishSms(await runCaptchaClick(CDP_URL, {
+              spec: captchaClick,
+              timeoutMs,
+              dataDir: DATA_DIR,
+              chromePath,
+            }));
+          } else if (phone && areaCode) {
+            showLogo();
+            console.log("  Snowball CLI — Login\n");
+            exitCode = await finishSms(await runPhoneLogin(CDP_URL, {
               phone,
               areaCode,
               timeoutMs,
               dataDir: DATA_DIR,
-            });
-            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-sms" });
-            console.log("LOGIN_OK=1");
-          } else if (hasFlag("manual")) {
-            const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
-            saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
+              interactive: shouldPromptForSms(process.stdin.isTTY, hasFlag("no-wait")),
+              chromePath,
+            }));
           } else {
-            try {
-              const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng, timeoutMs });
-              saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
-            } catch (e: any) {
-              // Agents and --qr-png must not block on ENTER. A TTY can still fall back.
-              if (qrPng || !process.stdin.isTTY) {
-                throw new Error(`QR failed: ${e.message}`);
-              }
-              console.error(`\n  QR failed: ${e.message}\n  Falling back to manual...\n`);
+            showLogo();
+            console.log("  Snowball CLI — Login\n");
+            await ensureChrome(CDP_URL, chromePath);
+            console.log("  Opening xueqiu.com...\n");
+            await openXueqiuTab(CDP_URL);
+
+            if (hasFlag("manual")) {
               const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
               saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
+            } else {
+              try {
+                const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng, timeoutMs });
+                saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
+              } catch (e: any) {
+                // Agents and --qr-png must not block on ENTER. A TTY can still fall back.
+                if (qrPng || !process.stdin.isTTY) {
+                  throw new Error(`QR failed: ${e.message}`);
+                }
+                console.error(`\n  QR failed: ${e.message}\n  Falling back to manual...\n`);
+                const cookie = await waitForManualLogin(CDP_URL, timeoutMs);
+                saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
+              }
             }
+            console.log("\n  ✓ Login successful! Token saved.\n");
+            console.log("  Try: snowball quote SH600519\n");
           }
-          console.log("\n  ✓ Login successful! Token saved.\n");
-          console.log("  Try: snowball quote SH600519\n");
         } finally {
+          if (sms) stopSnowballChrome();
           stopStartedXvfb();
         }
+        if (exitCode !== 0) process.exit(exitCode);
       },
     },
     token: {

@@ -59,10 +59,11 @@ snowball kol SH600519
 |---|---|
 | `snowball login` | QR code in the terminal — scan with the Xueqiu app |
 | `snowball login --qr-png <file>` | Write a PNG and wait until the app confirms (no ENTER). For agents that send the image to a phone |
-| `snowball login --phone <number> [--area-code 86]` | Phone + SMS. Prints `SMS_SENT=1`, then waits. Default area code is 86; `45` is Denmark |
-| `snowball login --sms-code <code>` | Deliver the SMS code to the waiting login (separate shell). Also accepts a line on stdin |
-| `snowball login --captcha-click <x,y>` | Optional GeeTest click, in pixels of the `CAPTCHA_REQUIRED` screenshot |
-| `snowball login --timeout <seconds>` | How long QR refresh or the SMS wait may run (default 600) |
+| `snowball login --phone <number> [--area-code 86]` | Phone + SMS. Prompts `请输入短信验证码:` and finishes in this command. Default area code is 86; `45` is Denmark |
+| `snowball login --phone <number> --no-wait` | Send the SMS, print `SMS_SENT=1`, and exit. Same when stdin is not a TTY |
+| `snowball login --sms-code <code>` | Finish from the saved session (after `--no-wait`, or if the prompt was killed) |
+| `snowball login --captcha-click <x,y>` | Resume a saved GeeTest challenge and send the SMS. Coordinates are pixels in the PNG |
+| `snowball login --timeout <seconds>` | How long QR refresh or the SMS send may run (default 600) |
 | `snowball login --manual` | Opens a Chrome window for you to scan |
 | `snowball token <cookie>` | Paste cookie from DevTools |
 | `snowball export` / `import <b64>` | Transfer token between machines |
@@ -175,20 +176,25 @@ snowball login [--qr-png <file>]
   ├─ Stop the Xvfb this command started
   └─ Save cookies to ~/.snowball-cli/token.json (file 0600, directory 0700)
 
-snowball login --phone <number> [--area-code 86] [--timeout 600]
+snowball login --phone <number> [--area-code 86] [--no-wait] [--timeout 600]
   ├─ Same Chrome / Xvfb startup as the QR flow
   ├─ Open the www.xueqiu.com login modal (验证码登录)
   ├─ Check 阅读并同意, fill the number, click 发送验证码
-  ├─ GeeTest (available:1) → CAPTCHA_REQUIRED=<png> and wait
-  │    Optional: snowball login --captcha-click x,y  (pixels in that PNG)
-  ├─ SMS_SENT=1
-  ├─ Wait for the code on stdin, or from another shell:
-  │    snowball login --sms-code <code>
-  │    which writes ~/.snowball-cli/sms-login/code (dir 0700, file 0600)
-  ├─ The page posts /snb/provider/login (SM4). Error 20099 is auto-register
-  ├─ A wrong or expired code prints SMS_CODE_REJECTED=1 and can be resent
+  ├─ GeeTest (available:1) on a TTY → CAPTCHA_REQUIRED=<png>
+  │    then prompt 请输入点击坐标 (x,y;x,y): while that widget is still open
+  ├─ No TTY, or a captcha with no coordinates yet → save the session and exit
+  │    snowball login --captcha-click x,y   resumes, sends, and exits
+  ├─ On send, write ~/.snowball-cli/sms-login/session.json (dir 0700, file 0600)
+  │    and stop Chrome and the Xvfb this command started
+  ├─ A TTY prompts 请输入短信验证码: and POSTs /snb/provider/login (SM4)
+  │    A wrong code prompts again and does not send another SMS
+  ├─ No TTY, or --no-wait → print SMS_SENT=1 and exit
+  │    snowball login --sms-code <code> finishes from the saved session
+  │    Killing the prompt after the SMS was sent still leaves that file
+  ├─ Error 20099 resubmits once with is_register=1
   ├─ LOGIN_OK=1 only when xq_is_login is set; token.json stays mode 0600
-  └─ Stop the Xvfb this command started. The phone, code, and cookies are not logged
+  └─ The session expires after 10 minutes. A wrong code leaves it in place.
+     The phone, code, and cookies are not logged
 ```
 
 ## License

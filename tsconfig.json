@@ -11,5 +11,5 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["index.ts", "cli.ts", "lib/**/*.ts", "test/**/*.ts"]
+  "include": ["index.ts", "cli.ts", "lib/**/*.ts", "lib/**/*.d.ts", "test/**/*.ts"]
 }

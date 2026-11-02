@@ -59,10 +59,11 @@ snowball kol SH600519
 |---|---|
 | `snowball login` | 终端内二维码，用雪球 App 扫码 |
 | `snowball login --qr-png <文件>` | 写出 PNG 并一直等到 App 确认（不用按回车）。给要把图片发到手机的 Agent 用 |
-| `snowball login --phone <号码> [--area-code 86]` | 手机号 + 短信验证码。成功发码打印 `SMS_SENT=1` 然后等待。默认区号 86，丹麦是 45 |
-| `snowball login --sms-code <验证码>` | 另一个 shell 把验证码交给正在等待的登录。这个进程的 stdin 有输入时也会读 |
-| `snowball login --captcha-click <x,y>` | 可选。按 `CAPTCHA_REQUIRED` 截图里的像素点 GeeTest |
-| `snowball login --timeout <秒>` | 二维码刷新或短信等待的总时长，默认 600 |
+| `snowball login --phone <号码> [--area-code 86]` | 手机号 + 短信。提示 `请输入短信验证码:` 并在同一条命令里完成登录。默认区号 86，丹麦是 45 |
+| `snowball login --phone <号码> --no-wait` | 发出短信后打印 `SMS_SENT=1` 并退出。stdin 不是 TTY 时也是这样 |
+| `snowball login --sms-code <验证码>` | 用已保存的会话完成登录（`--no-wait`，或交互进程在发码后被杀掉） |
+| `snowball login --captcha-click <x,y>` | 从保存的 GeeTest 继续，发出短信后退出。坐标是 PNG 里的像素 |
+| `snowball login --timeout <秒>` | 二维码刷新或等待短信发出的时长，默认 600 |
 | `snowball login --manual` | 打开 Chrome 窗口扫码 |
 | `snowball token <cookie>` | 粘贴 DevTools 中的 cookie |
 | `snowball export` / `import <b64>` | 跨机器传输 token |
@@ -157,20 +158,25 @@ snowball login [--qr-png <文件>]
   ├─ 关掉本次启动的 Xvfb
   └─ 保存 Cookie 到 ~/.snowball-cli/token.json（文件 0600，目录 0700）
 
-snowball login --phone <号码> [--area-code 86] [--timeout 600]
+snowball login --phone <号码> [--area-code 86] [--no-wait] [--timeout 600]
   ├─ Chrome / Xvfb 与扫码登录相同
   ├─ 打开 www.xueqiu.com 登录框（验证码登录）
   ├─ 勾选协议，填入手机号，点击发送验证码
-  ├─ 出现 GeeTest（available:1）时打印 CAPTCHA_REQUIRED=<png> 并继续等
-  │    另一个 shell 可以：snowball login --captcha-click x,y（截图像素）
-  ├─ 打印 SMS_SENT=1
-  ├─ 等待验证码。另一个 shell：snowball login --sms-code <验证码>
-  │    写入 ~/.snowball-cli/sms-login/code（目录 0700，文件 0600）
-  │    当前进程的 stdin 如果有一行数字，也会当作验证码
-  ├─ 页面自己 POST /snb/provider/login（SM4）。错误码 20099 会按网页那样自动注册后再提交
-  ├─ 验证码错误或过期打印 SMS_CODE_REJECTED=1，超时前可以再提交一次
+  ├─ 有 TTY 且出现 GeeTest（available:1）时打印 CAPTCHA_REQUIRED=<png>
+  │    并提示 请输入点击坐标 (x,y;x,y):，此时验证码窗口还开着
+  ├─ 没有 TTY，或还没有坐标：保存会话后退出
+  │    snowball login --captcha-click x,y 会重新打开验证码、发出短信并退出
+  ├─ 短信发出后立刻写入 ~/.snowball-cli/sms-login/session.json（目录 0700，文件 0600）
+  │    并关掉本次的 Chrome 和 Xvfb
+  ├─ 有 TTY 时提示 请输入短信验证码:，然后 POST /snb/provider/login（SM4）
+  │    验证码错了会再问一次，不会重新发短信
+  ├─ 没有 TTY，或加了 --no-wait：打印 SMS_SENT=1 后退出
+  │    snowball login --sms-code <验证码> 用保存的会话完成登录
+  │    交互进程在短信发出后被杀掉，这条命令仍然有效
+  ├─ 错误码 20099 会带 is_register=1 再提交一次
   ├─ 只有拿到 xq_is_login 才打印 LOGIN_OK=1，token.json 仍是 0600
-  └─ 关掉本次启动的 Xvfb。不会打印完整手机号、验证码或 Cookie
+  └─ 会话大约 10 分钟后过期。验证码错误不会删会话。
+     不会打印完整手机号、验证码或 Cookie
 ```
 
 ## 协议

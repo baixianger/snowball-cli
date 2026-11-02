@@ -26,9 +26,9 @@ ssh vps "apt install -y xvfb google-chrome-stable"   # 或 chromium-browser
 ssh vps "~/.bun/bin/snowball login --qr-png /tmp/xueqiu-qr.png"
 # 打印 QR_PNG=/tmp/xueqiu-qr.png，然后一直等到雪球 App 里确认
 
-# 没有雪球 App：用手机号和短信验证码。默认区号 86。
+# 没有雪球 App：用手机号和短信验证码。有 TTY 时会提示输入验证码。
 ssh vps "~/.bun/bin/snowball login --phone <号码> --area-code 86"
-# 看到 SMS_SENT=1 之后，另一个 shell：
+# 没有 TTY（或加了 --no-wait）：看到 SMS_SENT=1 之后
 ssh vps "~/.bun/bin/snowball login --sms-code <验证码>"
 ```
 

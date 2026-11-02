@@ -148,10 +148,31 @@ function stopProfileChrome(profileDir: string): void {
   if (platform() === "win32") return;
   const pattern = `--user-data-dir=${profileDir}`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   try {
-    execFileSync("pkill", ["-f", pattern], { stdio: "ignore" });
+    // SIGKILL: a SIGTERM often leaves Chrome zygotes and crashpad handlers behind.
+    execFileSync("pkill", ["-9", "-f", pattern], { stdio: "ignore" });
   } catch {
     // pkill exits 1 when nothing matched, and may be absent.
   }
+}
+
+/** Stop Chrome started with the snowball profile. Safe to call more than once. */
+export function stopSnowballChrome(): void {
+  stopProfileChrome(CHROME_PROFILE_DIR);
+}
+
+let smsCleanupArmed = false;
+
+/**
+ * SMS login must not leave the profile Chrome running if this process is
+ * killed. `process.exit` from the Xvfb signal hook skips `finally`, so the
+ * exit hook is what actually runs.
+ */
+export function armSmsProcessCleanup(): void {
+  if (smsCleanupArmed) return;
+  smsCleanupArmed = true;
+  process.on("exit", () => {
+    stopSnowballChrome();
+  });
 }
 
 function sleep(ms: number): Promise<void> {
