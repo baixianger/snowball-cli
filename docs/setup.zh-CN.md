@@ -3,6 +3,7 @@
 ## 本地桌面（macOS / Windows / Linux）
 
 ```bash
+curl -fsSL https://bun.sh/install | bash   # 必须用 Bun，snowball 命令由 Bun 执行
 bun add -g snowball-cli
 snowball login    # 终端内扫码，最简单
 ```
@@ -16,11 +17,14 @@ ssh vps "curl -fsSL https://bun.sh/install | bash && ~/.bun/bin/bun add -g snowb
 ssh vps "~/.bun/bin/snowball import $(snowball export)"
 ```
 
-**方式 B：VPS 上装 Chromium 直接登录**
+**方式 B：在 VPS 上装 Chrome 和 Xvfb，直接登录**
+
+无头 Chrome 会被雪球 WAF 拦住（页面不发 `device_id`）。没有 `DISPLAY` 时，`snowball login` 会拉起 Xvfb 和真实 Chrome 窗口（带 `--no-sandbox`，并清掉残留的 `Singleton*` 锁）。不要依赖 `--headless`。
 
 ```bash
-ssh vps "apt install -y chromium-browser"
-ssh vps "~/.bun/bin/snowball login"    # 自动无头模式，QR 在 SSH 终端显示
+ssh vps "apt install -y xvfb google-chrome-stable"   # 或 chromium-browser
+ssh vps "~/.bun/bin/snowball login --qr-png /tmp/xueqiu-qr.png"
+# 打印 QR_PNG=/tmp/xueqiu-qr.png，然后一直等到雪球 App 里确认
 ```
 
 ## Docker 容器

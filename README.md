@@ -27,8 +27,11 @@ A CLI that wraps [Xueqiu (雪球)](https://xueqiu.com) APIs into JSON for AI age
 
 ## Install
 
+Bun is the runtime. The `snowball` bin is `#!/usr/bin/env bun` (login uses Bun-only APIs such as `for await` of `console`). Node cannot run it.
+
 ```bash
-npm install -g snowball-cli     # or: bun add -g snowball-cli
+curl -fsSL https://bun.sh/install | bash
+bun add -g snowball-cli
 ```
 
 > **VPS / Docker / OpenClaw?** See the [Setup Guide](https://github.com/baixianger/snowball-cli/blob/main/docs/setup.md).
@@ -54,8 +57,9 @@ snowball kol SH600519
 
 | Command | Description |
 |---|---|
-| `snowball login` | QR code in terminal — scan with Xueqiu app |
-| `snowball login --manual` | Opens Chrome window for you to scan |
+| `snowball login` | QR code in the terminal — scan with the Xueqiu app |
+| `snowball login --qr-png <file>` | Write a PNG and wait until the app confirms (no ENTER). For agents that send the image to a phone |
+| `snowball login --manual` | Opens a Chrome window for you to scan |
 | `snowball token <cookie>` | Paste cookie from DevTools |
 | `snowball export` / `import <b64>` | Transfer token between machines |
 | `snowball status` | Verify token is active |
@@ -152,12 +156,16 @@ snowball profile <id>
 ## How login works
 
 ```
-snowball login
+snowball login [--qr-png <file>]
   ├─ Find Chrome/Chromium (CHROME_PATH > --chrome > auto-detect)
-  ├─ Start browser (auto-headless on VPS) → xueqiu.com → solve WAF
-  ├─ Generate QR via API → render in terminal
-  ├─ Poll scan status → auto-regenerate if expired (3x)
-  ├─ Fallback to manual Chrome mode if QR fails
+  ├─ Linux: --no-sandbox, drop stale Singleton* locks
+  ├─ No DISPLAY: Xvfb + a real window (headless Chrome cannot pass Xueqiu's WAF)
+  ├─ Open www.xueqiu.com → read WAF cookies
+  ├─ POST /snb/provider/generate-qr-code
+  ├─ Print a terminal QR and/or write a PNG (QR_PNG=<path>)
+  ├─ GET https://www.xueqiu.com/snb/provider/query-qr-code-state
+  │    (the apex host 301s here and fetch() would drop Cookie, which is HTTP 400)
+  ├─ Wait until the app confirms. No ENTER when stdin is not a TTY, or when --qr-png is set
   └─ Save cookies to ~/.snowball-cli/token.json
 ```
 

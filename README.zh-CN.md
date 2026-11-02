@@ -27,8 +27,11 @@
 
 ## 安装
 
+运行时是 Bun。安装后的 `snowball` 是 `#!/usr/bin/env bun`（登录用了 Bun 才有的 `for await (const line of console)`）。不要用 Node 跑。
+
 ```bash
-npm install -g snowball-cli     # 或：bun add -g snowball-cli
+curl -fsSL https://bun.sh/install | bash
+bun add -g snowball-cli
 ```
 
 > **VPS / Docker / OpenClaw？** 请看 [安装与授权指南](https://github.com/baixianger/snowball-cli/blob/main/docs/setup.zh-CN.md)。
@@ -55,6 +58,7 @@ snowball kol SH600519
 | 命令 | 说明 |
 |---|---|
 | `snowball login` | 终端内二维码，用雪球 App 扫码 |
+| `snowball login --qr-png <文件>` | 写出 PNG 并一直等到 App 确认（不用按回车）。给要把图片发到手机的 Agent 用 |
 | `snowball login --manual` | 打开 Chrome 窗口扫码 |
 | `snowball token <cookie>` | 粘贴 DevTools 中的 cookie |
 | `snowball export` / `import <b64>` | 跨机器传输 token |
@@ -135,12 +139,16 @@ snowball profile <ID>
 ## 登录原理
 
 ```
-snowball login
+snowball login [--qr-png <文件>]
   ├─ 查找 Chrome/Chromium（CHROME_PATH > --chrome > 自动检测）
-  ├─ 启动浏览器（VPS 自动无头）→ xueqiu.com → 通过 WAF
-  ├─ 调用 API 生成二维码 → 终端渲染
-  ├─ 轮询扫码状态 → 过期自动刷新（3 次）
-  ├─ 全失败 → 降级为 Chrome 窗口扫码
+  ├─ Linux：加上 --no-sandbox，并清掉 profile 里残留的 Singleton* 锁
+  ├─ 没有 DISPLAY：用 Xvfb 开真实窗口（无头 Chrome 拿不到雪球 WAF cookie）
+  ├─ 打开 www.xueqiu.com，读取 WAF cookie
+  ├─ POST /snb/provider/generate-qr-code
+  ├─ 终端二维码，和/或写 PNG（打印 QR_PNG=<路径>）
+  ├─ GET https://www.xueqiu.com/snb/provider/query-qr-code-state
+  │    （apex 域名会 301 到 www，fetch 跟着重定向时会丢掉 Cookie，于是 HTTP 400）
+  ├─ 一直等到 App 里点确认。stdin 不是 TTY，或用了 --qr-png 时，不需要按回车
   └─ 保存 Cookie 到 ~/.snowball-cli/token.json
 ```
 

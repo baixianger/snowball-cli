@@ -6,17 +6,22 @@
 
 ### `snowball login`
 
-终端内显示二维码，用雪球 App 扫码登录。自动查找 Chrome/Chromium 浏览器。
+终端内显示二维码，用雪球 App 扫码登录。自动查找 Chrome/Chromium。运行时必须是 Bun。
 
 ```bash
-snowball login                         # 默认，二维码在终端显示
-snowball login --manual                # 在 Chrome 窗口中扫码
+snowball login                          # 默认，二维码在终端显示
+snowball login --qr-png /tmp/xq.png     # 写出 PNG，打印 QR_PNG=路径，然后一直等待扫码确认
+snowball login --manual                 # 在 Chrome 窗口中扫码（有 TTY 时按回车）
 snowball login --chrome /path/to/chrome # 指定浏览器路径
 ```
 
 浏览器查找顺序：`CHROME_PATH` 环境变量 → `--chrome` 参数 → Chrome → Chromium → 平台默认路径。
 
-VPS 上无 `DISPLAY` 时自动以 `--headless` 模式启动。二维码过期会自动刷新，最多 3 次。
+Linux 上会加 `--no-sandbox`，并在启动前删除 profile 目录里残留的 `SingletonLock` / `SingletonCookie` / `SingletonSocket`。没有 `DISPLAY` 时用 Xvfb 打开真实窗口：雪球的阿里云 WAF 不会给无头 Chrome 发 cookie。
+
+`--qr-png`，以及 stdin 不是 TTY 时，不会要求按回车。二维码过期会自动刷新，最多 3 次。
+
+轮询地址是 `https://www.xueqiu.com/snb/provider/query-qr-code-state`。对 apex `xueqiu.com` 发 GET 会 301 到 www，`fetch` 跟随重定向时丢掉 `Cookie`，接口就返回 HTTP 400。
 
 ### `snowball token <cookie>`
 

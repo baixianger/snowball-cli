@@ -1,64 +1,20 @@
-import { createRequire } from "node:module";
-var __create = Object.create;
-var __getProtoOf = Object.getPrototypeOf;
-var __defProp = Object.defineProperty;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-function __accessProp(key) {
-  return this[key];
-}
-var __toESMCache_node;
-var __toESMCache_esm;
-var __toESM = (mod, isNodeMode, target) => {
-  var canCache = mod != null && typeof mod === "object";
-  if (canCache) {
-    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
-    var cached = cache.get(mod);
-    if (cached)
-      return cached;
-  }
-  target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: __accessProp.bind(mod, key),
-        enumerable: true
-      });
-  if (canCache)
-    cache.set(mod, to);
-  return to;
-};
+#!/usr/bin/env bun
+// @bun
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
-var __returnValue = (v) => v;
-function __exportSetter(name, newValue) {
-  this[name] = __returnValue.bind(null, newValue);
-}
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, {
-      get: all[name],
-      enumerable: true,
-      configurable: true,
-      set: __exportSetter.bind(all, name)
-    });
+var __esm = (fn, res, err) => () => {
+  if (fn)
+    try {
+      res = fn(fn = 0);
+    } catch (e) {
+      err = [e];
+    }
+  if (err)
+    throw err[0];
+  return res;
 };
-var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
-var __require = /* @__PURE__ */ createRequire(import.meta.url);
+var __require = import.meta.require;
 
 // lib/auth.ts
-var exports_auth = {};
-__export(exports_auth, {
-  verifyToken: () => verifyToken,
-  saveToken: () => saveToken,
-  loadToken: () => loadToken,
-  hasToken: () => hasToken,
-  getCookie: () => getCookie,
-  extractFromChrome: () => extractFromChrome,
-  XUEQIU_HOST: () => XUEQIU_HOST,
-  TOKEN_PATH: () => TOKEN_PATH,
-  DATA_DIR: () => DATA_DIR
-});
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -75,18 +31,16 @@ function loadToken() {
     return null;
   }
 }
-function hasToken() {
-  return existsSync(TOKEN_PATH);
-}
 function getCookie() {
   const token = loadToken();
   if (!token) {
     console.error(`
   Not logged in. Run:
 `);
-    console.error("    snowball login          # QR code in terminal");
-    console.error("    snowball login --manual  # scan in Chrome window");
-    console.error(`    snowball token <cookie>  # manual paste
+    console.error("    snowball login                 # QR code in the terminal");
+    console.error("    snowball login --qr-png <file> # PNG for a phone chat, then wait");
+    console.error("    snowball login --manual        # scan in the Chrome window");
+    console.error(`    snowball token <cookie>        # manual paste
 `);
     process.exit(1);
   }
@@ -110,43 +64,7 @@ async function verifyToken(cookie) {
     return { valid: false };
   }
 }
-async function extractFromChrome(cdpUrl = "http://127.0.0.1:9222") {
-  const res = await fetch(`${cdpUrl}/json/version`);
-  const { webSocketDebuggerUrl } = await res.json();
-  const ws = new WebSocket(webSocketDebuggerUrl);
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      ws.close();
-      reject(new Error("CDP timeout"));
-    }, 1e4);
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        id: 1,
-        method: "Network.getCookies",
-        params: { urls: ["https://xueqiu.com"] }
-      }));
-    };
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
-      if (msg.id === 1) {
-        clearTimeout(timeout);
-        ws.close();
-        const cookies = msg.result?.cookies || [];
-        const relevant = cookies.filter((c) => c.domain?.includes("xueqiu")).map((c) => `${c.name}=${c.value}`).join("; ");
-        if (!relevant.includes("xq_a_token")) {
-          reject(new Error("xq_a_token not found — are you logged in to xueqiu.com in Chrome?"));
-          return;
-        }
-        resolve(relevant);
-      }
-    };
-    ws.onerror = () => {
-      clearTimeout(timeout);
-      reject(new Error(`Could not connect to Chrome at ${cdpUrl}`));
-    };
-  });
-}
-var DATA_DIR, TOKEN_PATH, XUEQIU_HOST = "xueqiu.com";
+var DATA_DIR, TOKEN_PATH;
 var init_auth = __esm(() => {
   DATA_DIR = join(homedir(), ".snowball-cli");
   TOKEN_PATH = join(DATA_DIR, "token.json");
@@ -154,14 +72,14 @@ var init_auth = __esm(() => {
 });
 
 // node_modules/qrcode/lib/can-promise.js
-var require_can_promise = __commonJS((exports, module) => {
+var require_can_promise = __commonJS(function(exports, module) {
   module.exports = function() {
     return typeof Promise === "function" && Promise.prototype && Promise.prototype.then;
   };
 });
 
 // node_modules/qrcode/lib/core/utils.js
-var require_utils = __commonJS((exports) => {
+var require_utils = __commonJS(function(exports) {
   var toSJISFunction;
   var CODEWORDS_COUNT = [
     0,
@@ -239,7 +157,7 @@ var require_utils = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/error-correction-level.js
-var require_error_correction_level = __commonJS((exports) => {
+var require_error_correction_level = __commonJS(function(exports) {
   exports.L = { bit: 1 };
   exports.M = { bit: 0 };
   exports.Q = { bit: 3 };
@@ -282,7 +200,7 @@ var require_error_correction_level = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/bit-buffer.js
-var require_bit_buffer = __commonJS((exports, module) => {
+var require_bit_buffer = __commonJS(function(exports, module) {
   function BitBuffer() {
     this.buffer = [];
     this.length = 0;
@@ -315,7 +233,7 @@ var require_bit_buffer = __commonJS((exports, module) => {
 });
 
 // node_modules/qrcode/lib/core/bit-matrix.js
-var require_bit_matrix = __commonJS((exports, module) => {
+var require_bit_matrix = __commonJS(function(exports, module) {
   function BitMatrix(size) {
     if (!size || size < 1) {
       throw new Error("BitMatrix size must be defined and greater than 0");
@@ -343,7 +261,7 @@ var require_bit_matrix = __commonJS((exports, module) => {
 });
 
 // node_modules/qrcode/lib/core/alignment-pattern.js
-var require_alignment_pattern = __commonJS((exports) => {
+var require_alignment_pattern = __commonJS(function(exports) {
   var getSymbolSize = require_utils().getSymbolSize;
   exports.getRowColCoords = function getRowColCoords(version) {
     if (version === 1)
@@ -375,7 +293,7 @@ var require_alignment_pattern = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/finder-pattern.js
-var require_finder_pattern = __commonJS((exports) => {
+var require_finder_pattern = __commonJS(function(exports) {
   var getSymbolSize = require_utils().getSymbolSize;
   var FINDER_PATTERN_SIZE = 7;
   exports.getPositions = function getPositions(version) {
@@ -389,7 +307,7 @@ var require_finder_pattern = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/mask-pattern.js
-var require_mask_pattern = __commonJS((exports) => {
+var require_mask_pattern = __commonJS(function(exports) {
   exports.Patterns = {
     PATTERN000: 0,
     PATTERN001: 1,
@@ -538,7 +456,7 @@ var require_mask_pattern = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/error-correction-code.js
-var require_error_correction_code = __commonJS((exports) => {
+var require_error_correction_code = __commonJS(function(exports) {
   var ECLevel = require_error_correction_level();
   var EC_BLOCKS_TABLE = [
     1,
@@ -895,7 +813,7 @@ var require_error_correction_code = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/galois-field.js
-var require_galois_field = __commonJS((exports) => {
+var require_galois_field = __commonJS(function(exports) {
   var EXP_TABLE = new Uint8Array(512);
   var LOG_TABLE = new Uint8Array(256);
   (function initTables() {
@@ -928,9 +846,9 @@ var require_galois_field = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/polynomial.js
-var require_polynomial = __commonJS((exports) => {
+var require_polynomial = __commonJS(function(exports) {
   var GF = require_galois_field();
-  exports.mul = function mul(p1, p2) {
+  exports.mul = function mul2(p1, p2) {
     const coeff = new Uint8Array(p1.length + p2.length - 1);
     for (let i = 0;i < p1.length; i++) {
       for (let j = 0;j < p2.length; j++) {
@@ -963,7 +881,7 @@ var require_polynomial = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/reed-solomon-encoder.js
-var require_reed_solomon_encoder = __commonJS((exports, module) => {
+var require_reed_solomon_encoder = __commonJS(function(exports, module) {
   var Polynomial = require_polynomial();
   function ReedSolomonEncoder(degree) {
     this.genPoly = undefined;
@@ -994,14 +912,14 @@ var require_reed_solomon_encoder = __commonJS((exports, module) => {
 });
 
 // node_modules/qrcode/lib/core/version-check.js
-var require_version_check = __commonJS((exports) => {
+var require_version_check = __commonJS(function(exports) {
   exports.isValid = function isValid(version) {
     return !isNaN(version) && version >= 1 && version <= 40;
   };
 });
 
 // node_modules/qrcode/lib/core/regex.js
-var require_regex = __commonJS((exports) => {
+var require_regex = __commonJS(function(exports) {
   var numeric = "[0-9]+";
   var alphanumeric = "[A-Z $%*+\\-./:]+";
   var kanji = "(?:[u3000-u303F]|[u3040-u309F]|[u30A0-u30FF]|" + "[uFF00-uFFEF]|[u4E00-u9FAF]|[u2605-u2606]|[u2190-u2195]|u203B|" + "[u2010u2015u2018u2019u2025u2026u201Cu201Du2225u2260]|" + "[u0391-u0451]|[u00A7u00A8u00B1u00B4u00D7u00F7])+";
@@ -1028,7 +946,7 @@ var require_regex = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/mode.js
-var require_mode = __commonJS((exports) => {
+var require_mode = __commonJS(function(exports) {
   var VersionCheck = require_version_check();
   var Regex = require_regex();
   exports.NUMERIC = {
@@ -1115,7 +1033,7 @@ var require_mode = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/version.js
-var require_version = __commonJS((exports) => {
+var require_version = __commonJS(function(exports) {
   var Utils = require_utils();
   var ECCode = require_error_correction_code();
   var ECLevel = require_error_correction_level();
@@ -1210,7 +1128,7 @@ var require_version = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/format-info.js
-var require_format_info = __commonJS((exports) => {
+var require_format_info = __commonJS(function(exports) {
   var Utils = require_utils();
   var G15 = 1 << 10 | 1 << 8 | 1 << 5 | 1 << 4 | 1 << 2 | 1 << 1 | 1 << 0;
   var G15_MASK = 1 << 14 | 1 << 12 | 1 << 10 | 1 << 4 | 1 << 1;
@@ -1226,7 +1144,7 @@ var require_format_info = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/numeric-data.js
-var require_numeric_data = __commonJS((exports, module) => {
+var require_numeric_data = __commonJS(function(exports, module) {
   var Mode = require_mode();
   function NumericData(data) {
     this.mode = Mode.NUMERIC;
@@ -1259,7 +1177,7 @@ var require_numeric_data = __commonJS((exports, module) => {
 });
 
 // node_modules/qrcode/lib/core/alphanumeric-data.js
-var require_alphanumeric_data = __commonJS((exports, module) => {
+var require_alphanumeric_data = __commonJS(function(exports, module) {
   var Mode = require_mode();
   var ALPHA_NUM_CHARS = [
     "0",
@@ -1336,7 +1254,7 @@ var require_alphanumeric_data = __commonJS((exports, module) => {
 });
 
 // node_modules/qrcode/lib/core/byte-data.js
-var require_byte_data = __commonJS((exports, module) => {
+var require_byte_data = __commonJS(function(exports, module) {
   var Mode = require_mode();
   function ByteData(data) {
     this.mode = Mode.BYTE;
@@ -1364,7 +1282,7 @@ var require_byte_data = __commonJS((exports, module) => {
 });
 
 // node_modules/qrcode/lib/core/kanji-data.js
-var require_kanji_data = __commonJS((exports, module) => {
+var require_kanji_data = __commonJS(function(exports, module) {
   var Mode = require_mode();
   var Utils = require_utils();
   function KanjiData(data) {
@@ -1400,7 +1318,7 @@ var require_kanji_data = __commonJS((exports, module) => {
 });
 
 // node_modules/dijkstrajs/dijkstra.js
-var require_dijkstra = __commonJS((exports, module) => {
+var require_dijkstra = __commonJS(function(exports, module) {
   var dijkstra = {
     single_source_shortest_paths: function(graph, s, d) {
       var predecessors = {};
@@ -1485,7 +1403,7 @@ var require_dijkstra = __commonJS((exports, module) => {
 });
 
 // node_modules/qrcode/lib/core/segments.js
-var require_segments = __commonJS((exports) => {
+var require_segments = __commonJS(function(exports) {
   var Mode = require_mode();
   var NumericData = require_numeric_data();
   var AlphanumericData = require_alphanumeric_data();
@@ -1669,7 +1587,7 @@ var require_segments = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/core/qrcode.js
-var require_qrcode = __commonJS((exports) => {
+var require_qrcode = __commonJS(function(exports) {
   var Utils = require_utils();
   var ECLevel = require_error_correction_level();
   var BitBuffer = require_bit_buffer();
@@ -1929,7 +1847,7 @@ var require_qrcode = __commonJS((exports) => {
 });
 
 // node_modules/pngjs/lib/chunkstream.js
-var require_chunkstream = __commonJS((exports, module) => {
+var require_chunkstream = __commonJS(function(exports, module) {
   var util = __require("util");
   var Stream = __require("stream");
   var ChunkStream = module.exports = function() {
@@ -2061,7 +1979,7 @@ var require_chunkstream = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/interlace.js
-var require_interlace = __commonJS((exports) => {
+var require_interlace = __commonJS(function(exports) {
   var imagePasses = [
     {
       x: [0],
@@ -2134,7 +2052,7 @@ var require_interlace = __commonJS((exports) => {
 });
 
 // node_modules/pngjs/lib/paeth-predictor.js
-var require_paeth_predictor = __commonJS((exports, module) => {
+var require_paeth_predictor = __commonJS(function(exports, module) {
   module.exports = function paethPredictor(left, above, upLeft) {
     let paeth = left + above - upLeft;
     let pLeft = Math.abs(paeth - left);
@@ -2151,7 +2069,7 @@ var require_paeth_predictor = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/filter-parse.js
-var require_filter_parse = __commonJS((exports, module) => {
+var require_filter_parse = __commonJS(function(exports, module) {
   var interlaceUtils = require_interlace();
   var paethPredictor = require_paeth_predictor();
   function getByteWidth(width, bpp, depth) {
@@ -2286,7 +2204,7 @@ var require_filter_parse = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/filter-parse-async.js
-var require_filter_parse_async = __commonJS((exports, module) => {
+var require_filter_parse_async = __commonJS(function(exports, module) {
   var util = __require("util");
   var ChunkStream = require_chunkstream();
   var Filter = require_filter_parse();
@@ -2309,7 +2227,7 @@ var require_filter_parse_async = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/constants.js
-var require_constants = __commonJS((exports, module) => {
+var require_constants = __commonJS(function(exports, module) {
   module.exports = {
     PNG_SIGNATURE: [137, 80, 78, 71, 13, 10, 26, 10],
     TYPE_IHDR: 1229472850,
@@ -2336,7 +2254,7 @@ var require_constants = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/crc.js
-var require_crc = __commonJS((exports, module) => {
+var require_crc = __commonJS(function(exports, module) {
   var crcTable = [];
   (function() {
     for (let i = 0;i < 256; i++) {
@@ -2373,7 +2291,7 @@ var require_crc = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/parser.js
-var require_parser = __commonJS((exports, module) => {
+var require_parser = __commonJS(function(exports, module) {
   var constants = require_constants();
   var CrcCalculator = require_crc();
   var Parser = module.exports = function(options, dependencies) {
@@ -2590,7 +2508,7 @@ var require_parser = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/bitmapper.js
-var require_bitmapper = __commonJS((exports) => {
+var require_bitmapper = __commonJS(function(exports) {
   var interlaceUtils = require_interlace();
   var pixelBppMapper = [
     function() {},
@@ -2801,7 +2719,7 @@ var require_bitmapper = __commonJS((exports) => {
 });
 
 // node_modules/pngjs/lib/format-normaliser.js
-var require_format_normaliser = __commonJS((exports, module) => {
+var require_format_normaliser = __commonJS(function(exports, module) {
   function dePalette(indata, outdata, width, height, palette) {
     let pxPos = 0;
     for (let y = 0;y < height; y++) {
@@ -2877,7 +2795,7 @@ var require_format_normaliser = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/parser-async.js
-var require_parser_async = __commonJS((exports, module) => {
+var require_parser_async = __commonJS(function(exports, module) {
   var util = __require("util");
   var zlib = __require("zlib");
   var ChunkStream = require_chunkstream();
@@ -2999,7 +2917,7 @@ var require_parser_async = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/bitpacker.js
-var require_bitpacker = __commonJS((exports, module) => {
+var require_bitpacker = __commonJS(function(exports, module) {
   var constants = require_constants();
   module.exports = function(dataIn, width, height, options) {
     let outHasAlpha = [constants.COLORTYPE_COLOR_ALPHA, constants.COLORTYPE_ALPHA].indexOf(options.colorType) !== -1;
@@ -3128,7 +3046,7 @@ var require_bitpacker = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/filter-pack.js
-var require_filter_pack = __commonJS((exports, module) => {
+var require_filter_pack = __commonJS(function(exports, module) {
   var paethPredictor = require_paeth_predictor();
   function filterNone(pxData, pxPos, byteWidth, rawData, rawPos) {
     for (let x = 0;x < byteWidth; x++) {
@@ -3267,7 +3185,7 @@ var require_filter_pack = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/packer.js
-var require_packer = __commonJS((exports, module) => {
+var require_packer = __commonJS(function(exports, module) {
   var constants = require_constants();
   var CrcStream = require_crc();
   var bitPacker = require_bitpacker();
@@ -3355,7 +3273,7 @@ var require_packer = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/packer-async.js
-var require_packer_async = __commonJS((exports, module) => {
+var require_packer_async = __commonJS(function(exports, module) {
   var util = __require("util");
   var Stream = __require("stream");
   var constants = require_constants();
@@ -3388,7 +3306,7 @@ var require_packer_async = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/sync-inflate.js
-var require_sync_inflate = __commonJS((exports, module) => {
+var require_sync_inflate = __commonJS(function(exports, module) {
   var assert = __require("assert").ok;
   var zlib = __require("zlib");
   var util = __require("util");
@@ -3507,7 +3425,7 @@ var require_sync_inflate = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/sync-reader.js
-var require_sync_reader = __commonJS((exports, module) => {
+var require_sync_reader = __commonJS(function(exports, module) {
   var SyncReader = module.exports = function(buffer) {
     this._buffer = buffer;
     this._reads = [];
@@ -3541,7 +3459,7 @@ var require_sync_reader = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/filter-parse-sync.js
-var require_filter_parse_sync = __commonJS((exports) => {
+var require_filter_parse_sync = __commonJS(function(exports) {
   var SyncReader = require_sync_reader();
   var Filter = require_filter_parse();
   exports.process = function(inBuffer, bitmapInfo) {
@@ -3561,7 +3479,7 @@ var require_filter_parse_sync = __commonJS((exports) => {
 });
 
 // node_modules/pngjs/lib/parser-sync.js
-var require_parser_sync = __commonJS((exports, module) => {
+var require_parser_sync = __commonJS(function(exports, module) {
   var hasSyncZlib = true;
   var zlib = __require("zlib");
   var inflateSync = require_sync_inflate();
@@ -3599,8 +3517,8 @@ var require_parser_sync = __commonJS((exports, module) => {
       gamma = _gamma_;
     }
     let inflateDataList = [];
-    function handleInflateData(inflatedData2) {
-      inflateDataList.push(inflatedData2);
+    function handleInflateData(inflatedData) {
+      inflateDataList.push(inflatedData);
     }
     let reader = new SyncReader(buffer);
     let parser = new Parser(options, {
@@ -3647,7 +3565,7 @@ var require_parser_sync = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/packer-sync.js
-var require_packer_sync = __commonJS((exports, module) => {
+var require_packer_sync = __commonJS(function(exports, module) {
   var hasSyncZlib = true;
   var zlib = __require("zlib");
   if (!zlib.deflateSync) {
@@ -3680,7 +3598,7 @@ var require_packer_sync = __commonJS((exports, module) => {
 });
 
 // node_modules/pngjs/lib/png-sync.js
-var require_png_sync = __commonJS((exports) => {
+var require_png_sync = __commonJS(function(exports) {
   var parse = require_parser_sync();
   var pack = require_packer_sync();
   exports.read = function(buffer, options) {
@@ -3692,7 +3610,7 @@ var require_png_sync = __commonJS((exports) => {
 });
 
 // node_modules/pngjs/lib/png.js
-var require_png = __commonJS((exports) => {
+var require_png = __commonJS(function(exports) {
   var util = __require("util");
   var Stream = __require("stream");
   var Parser = require_parser_async();
@@ -3816,7 +3734,7 @@ var require_png = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/renderer/utils.js
-var require_utils2 = __commonJS((exports) => {
+var require_utils2 = __commonJS(function(exports) {
   function hex2rgba(hex) {
     if (typeof hex === "number") {
       hex = hex.toString();
@@ -3897,7 +3815,7 @@ var require_utils2 = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/renderer/png.js
-var require_png2 = __commonJS((exports) => {
+var require_png2 = __commonJS(function(exports) {
   var fs = __require("fs");
   var PNG = require_png().PNG;
   var Utils = require_utils2();
@@ -3964,19 +3882,19 @@ var require_png2 = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/renderer/utf8.js
-var require_utf8 = __commonJS((exports) => {
+var require_utf8 = __commonJS(function(exports) {
   var Utils = require_utils2();
   var BLOCK_CHAR = {
     WW: " ",
-    WB: "▄",
-    BB: "█",
-    BW: "▀"
+    WB: "\u2584",
+    BB: "\u2588",
+    BW: "\u2580"
   };
   var INVERTED_BLOCK_CHAR = {
     BB: " ",
-    BW: "▄",
-    WW: "█",
-    WB: "▀"
+    BW: "\u2584",
+    WW: "\u2588",
+    WB: "\u2580"
   };
   function getBlockChar(top, bottom, blocks) {
     if (top && bottom)
@@ -4029,7 +3947,7 @@ var require_utf8 = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/renderer/terminal/terminal.js
-var require_terminal = __commonJS((exports) => {
+var require_terminal = __commonJS(function(exports) {
   exports.render = function(qrData, options, cb) {
     const size = qrData.modules.size;
     const data = qrData.modules.data;
@@ -4058,7 +3976,7 @@ var require_terminal = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/renderer/terminal/terminal-small.js
-var require_terminal_small = __commonJS((exports) => {
+var require_terminal_small = __commonJS(function(exports) {
   var backgroundWhite = "\x1B[47m";
   var backgroundBlack = "\x1B[40m";
   var foregroundWhite = "\x1B[37m";
@@ -4066,17 +3984,17 @@ var require_terminal_small = __commonJS((exports) => {
   var reset = "\x1B[0m";
   var lineSetupNormal = backgroundWhite + foregroundBlack;
   var lineSetupInverse = backgroundBlack + foregroundWhite;
-  var createPalette = function(lineSetup, foregroundWhite2, foregroundBlack2) {
+  var createPalette = function(lineSetup, foregroundWhite, foregroundBlack) {
     return {
       "00": reset + " " + lineSetup,
-      "01": reset + foregroundWhite2 + "▄" + lineSetup,
-      "02": reset + foregroundBlack2 + "▄" + lineSetup,
-      10: reset + foregroundWhite2 + "▀" + lineSetup,
+      "01": reset + foregroundWhite + "\u2584" + lineSetup,
+      "02": reset + foregroundBlack + "\u2584" + lineSetup,
+      10: reset + foregroundWhite + "\u2580" + lineSetup,
       11: " ",
-      12: "▄",
-      20: reset + foregroundBlack2 + "▀" + lineSetup,
-      21: "▀",
-      22: "█"
+      12: "\u2584",
+      20: reset + foregroundBlack + "\u2580" + lineSetup,
+      21: "\u2580",
+      22: "\u2588"
     };
   };
   var mkCodePixel = function(modules, size, x, y) {
@@ -4117,7 +4035,7 @@ var require_terminal_small = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/renderer/terminal.js
-var require_terminal2 = __commonJS((exports) => {
+var require_terminal2 = __commonJS(function(exports) {
   var big = require_terminal();
   var small = require_terminal_small();
   exports.render = function(qrData, options, cb) {
@@ -4129,7 +4047,7 @@ var require_terminal2 = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/renderer/svg-tag.js
-var require_svg_tag = __commonJS((exports) => {
+var require_svg_tag = __commonJS(function(exports) {
   var Utils = require_utils2();
   function getColorAttrib(color, attrib) {
     const alpha = color.a / 255;
@@ -4188,7 +4106,7 @@ var require_svg_tag = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/renderer/svg.js
-var require_svg = __commonJS((exports) => {
+var require_svg = __commonJS(function(exports) {
   var svgTagRenderer = require_svg_tag();
   exports.render = svgTagRenderer.render;
   exports.renderToFile = function renderToFile(path, qrData, options, cb) {
@@ -4204,7 +4122,7 @@ var require_svg = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/renderer/canvas.js
-var require_canvas = __commonJS((exports) => {
+var require_canvas = __commonJS(function(exports) {
   var Utils = require_utils2();
   function clearCanvas(ctx, canvas, size) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -4257,7 +4175,7 @@ var require_canvas = __commonJS((exports) => {
 });
 
 // node_modules/qrcode/lib/browser.js
-var require_browser = __commonJS((exports) => {
+var require_browser = __commonJS(function(exports) {
   var canPromise = require_can_promise();
   var QRCode = require_qrcode();
   var CanvasRenderer = require_canvas();
@@ -4324,150 +4242,202 @@ var require_browser = __commonJS((exports) => {
   });
 });
 
-// node_modules/qrcode/lib/server.js
-var require_server = __commonJS((exports) => {
-  var canPromise = require_can_promise();
-  var QRCode = require_qrcode();
-  var PngRenderer = require_png2();
-  var Utf8Renderer = require_utf8();
-  var TerminalRenderer = require_terminal2();
-  var SvgRenderer = require_svg();
-  function checkParams(text, opts, cb) {
-    if (typeof text === "undefined") {
-      throw new Error("String required as first argument");
-    }
-    if (typeof cb === "undefined") {
-      cb = opts;
-      opts = {};
-    }
-    if (typeof cb !== "function") {
-      if (!canPromise()) {
-        throw new Error("Callback required as last argument");
-      } else {
-        opts = cb || {};
-        cb = null;
-      }
-    }
-    return {
-      opts,
-      cb
-    };
-  }
-  function getTypeFromFilename(path) {
-    return path.slice((path.lastIndexOf(".") - 1 >>> 0) + 2).toLowerCase();
-  }
-  function getRendererFromType(type) {
-    switch (type) {
-      case "svg":
-        return SvgRenderer;
-      case "txt":
-      case "utf8":
-        return Utf8Renderer;
-      case "png":
-      case "image/png":
-      default:
-        return PngRenderer;
-    }
-  }
-  function getStringRendererFromType(type) {
-    switch (type) {
-      case "svg":
-        return SvgRenderer;
-      case "terminal":
-        return TerminalRenderer;
-      case "utf8":
-      default:
-        return Utf8Renderer;
-    }
-  }
-  function render(renderFunc, text, params) {
-    if (!params.cb) {
-      return new Promise(function(resolve, reject) {
-        try {
-          const data = QRCode.create(text, params.opts);
-          return renderFunc(data, params.opts, function(err, data2) {
-            return err ? reject(err) : resolve(data2);
-          });
-        } catch (e) {
-          reject(e);
-        }
-      });
-    }
-    try {
-      const data = QRCode.create(text, params.opts);
-      return renderFunc(data, params.opts, params.cb);
-    } catch (e) {
-      params.cb(e);
-    }
-  }
-  exports.create = QRCode.create;
-  exports.toCanvas = require_browser().toCanvas;
-  exports.toString = function toString(text, opts, cb) {
-    const params = checkParams(text, opts, cb);
-    const type = params.opts ? params.opts.type : undefined;
-    const renderer = getStringRendererFromType(type);
-    return render(renderer.render, text, params);
-  };
-  exports.toDataURL = function toDataURL(text, opts, cb) {
-    const params = checkParams(text, opts, cb);
-    const renderer = getRendererFromType(params.opts.type);
-    return render(renderer.renderToDataURL, text, params);
-  };
-  exports.toBuffer = function toBuffer(text, opts, cb) {
-    const params = checkParams(text, opts, cb);
-    const renderer = getRendererFromType(params.opts.type);
-    return render(renderer.renderToBuffer, text, params);
-  };
-  exports.toFile = function toFile(path, text, opts, cb) {
-    if (typeof path !== "string" || !(typeof text === "string" || typeof text === "object")) {
-      throw new Error("Invalid argument");
-    }
-    if (arguments.length < 3 && !canPromise()) {
-      throw new Error("Too few arguments provided");
-    }
-    const params = checkParams(text, opts, cb);
-    const type = params.opts.type || getTypeFromFilename(path);
-    const renderer = getRendererFromType(type);
-    const renderToFile = renderer.renderToFile.bind(null, path);
-    return render(renderToFile, text, params);
-  };
-  exports.toFileStream = function toFileStream(stream, text, opts) {
-    if (arguments.length < 2) {
-      throw new Error("Too few arguments provided");
-    }
-    const params = checkParams(text, opts, stream.emit.bind(stream, "error"));
-    const renderer = getRendererFromType("png");
-    const renderToFileStream = renderer.renderToFileStream.bind(null, stream);
-    render(renderToFileStream, text, params);
-  };
-});
-
 // index.ts
 init_auth();
 import { readFileSync as readFileSync2 } from "fs";
-import { homedir as homedir2 } from "os";
-import { join as join2, dirname } from "path";
+import { join as join3, dirname as dirname2 } from "path";
 import { fileURLToPath } from "url";
-import { platform } from "os";
 
 // lib/qr-terminal.ts
-var import_qrcode = __toESM(require_server(), 1);
-var XUEQIU_URL = "https://xueqiu.com";
+import { mkdirSync as mkdirSync2 } from "fs";
+import { dirname, resolve } from "path";
+
+// node_modules/qrcode/lib/server.js
+var canPromise = require_can_promise();
+var QRCode = require_qrcode();
+var PngRenderer = require_png2();
+var Utf8Renderer = require_utf8();
+var TerminalRenderer = require_terminal2();
+var SvgRenderer = require_svg();
+function checkParams(text, opts, cb) {
+  if (typeof text === "undefined") {
+    throw new Error("String required as first argument");
+  }
+  if (typeof cb === "undefined") {
+    cb = opts;
+    opts = {};
+  }
+  if (typeof cb !== "function") {
+    if (!canPromise()) {
+      throw new Error("Callback required as last argument");
+    } else {
+      opts = cb || {};
+      cb = null;
+    }
+  }
+  return {
+    opts,
+    cb
+  };
+}
+function getTypeFromFilename(path) {
+  return path.slice((path.lastIndexOf(".") - 1 >>> 0) + 2).toLowerCase();
+}
+function getRendererFromType(type) {
+  switch (type) {
+    case "svg":
+      return SvgRenderer;
+    case "txt":
+    case "utf8":
+      return Utf8Renderer;
+    case "png":
+    case "image/png":
+    default:
+      return PngRenderer;
+  }
+}
+function getStringRendererFromType(type) {
+  switch (type) {
+    case "svg":
+      return SvgRenderer;
+    case "terminal":
+      return TerminalRenderer;
+    case "utf8":
+    default:
+      return Utf8Renderer;
+  }
+}
+function render(renderFunc, text, params) {
+  if (!params.cb) {
+    return new Promise(function(resolve, reject) {
+      try {
+        const data = QRCode.create(text, params.opts);
+        return renderFunc(data, params.opts, function(err, data) {
+          return err ? reject(err) : resolve(data);
+        });
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+  try {
+    const data = QRCode.create(text, params.opts);
+    return renderFunc(data, params.opts, params.cb);
+  } catch (e) {
+    params.cb(e);
+  }
+}
+var $toCanvas = require_browser().toCanvas;
+var $toString = function toString(text, opts, cb) {
+  const params = checkParams(text, opts, cb);
+  const type = params.opts ? params.opts.type : undefined;
+  const renderer = getStringRendererFromType(type);
+  return render(renderer.render, text, params);
+};
+var $toFile = function toFile(path, text, opts, cb) {
+  if (typeof path !== "string" || !(typeof text === "string" || typeof text === "object")) {
+    throw new Error("Invalid argument");
+  }
+  if (arguments.length < 3 && !canPromise()) {
+    throw new Error("Too few arguments provided");
+  }
+  const params = checkParams(text, opts, cb);
+  const type = params.opts.type || getTypeFromFilename(path);
+  const renderer = getRendererFromType(type);
+  const renderToFile = renderer.renderToFile.bind(null, path);
+  return render(renderToFile, text, params);
+};
+
+// lib/qr-terminal.ts
+var XUEQIU_ORIGIN = "https://www.xueqiu.com";
 var HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   Accept: "application/json",
-  Origin: XUEQIU_URL,
-  Referer: `${XUEQIU_URL}/`,
+  Origin: XUEQIU_ORIGIN,
+  Referer: `${XUEQIU_ORIGIN}/`,
   "X-Requested-With": "XMLHttpRequest"
 };
-async function getWafCookies(cdpUrl) {
-  const targetsRes = await fetch(`${cdpUrl}/json`);
-  const targets = await targetsRes.json();
-  const xueqiuPage = targets.find((t) => t.type === "page" && t.url?.includes("xueqiu.com"));
-  if (!xueqiuPage?.webSocketDebuggerUrl) {
-    throw new Error("No xueqiu.com tab found in Chrome");
+function qrGenerateUrl() {
+  return `${XUEQIU_ORIGIN}/snb/provider/generate-qr-code`;
+}
+function qrPollUrl(code) {
+  return `${XUEQIU_ORIGIN}/snb/provider/query-qr-code-state?code=${encodeURIComponent(code)}`;
+}
+function interpretQRState(body) {
+  const status = body?.data?.status;
+  switch (status) {
+    case 0:
+      return { type: "pending" };
+    case 1:
+      return { type: "scanned" };
+    case 2:
+      return body?.data?.is_bind_tel ? { type: "confirmed", payload: body.data } : { type: "bindphone", payload: body.data };
+    case 3:
+      return { type: "cancelled" };
+    case 4:
+      return { type: "expired" };
+    case 5:
+      return { type: "login", payload: body.data };
+    default:
+      return { type: "invalid", status };
   }
-  const ws = new WebSocket(xueqiuPage.webSocketDebuggerUrl);
+}
+function parseCookie(cookie) {
+  const cookies = new Map;
+  for (const part of cookie.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed)
+      continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0)
+      continue;
+    cookies.set(trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1));
+  }
+  return cookies;
+}
+function mergeCookies(base, override) {
+  const cookies = parseCookie(base);
+  for (const [key, value] of parseCookie(override))
+    cookies.set(key, value);
+  return [...cookies.entries()].map(([key, value]) => `${key}=${value}`).join("; ");
+}
+function hasLoginCookie(cookie) {
+  const cookies = parseCookie(cookie);
+  const flag = cookies.get("xq_is_login");
+  return Boolean(flag && flag !== "0" && cookies.get("xq_a_token") && cookies.get("u"));
+}
+function readSetCookie(res) {
+  const headers = res.headers;
+  if (typeof headers.getSetCookie === "function")
+    return headers.getSetCookie();
+  const single = res.headers.get("set-cookie");
+  return single ? [single] : [];
+}
+function cookiePairsFromSetCookie(setCookies) {
+  return setCookies.map((line) => line.split(";")[0]?.trim()).filter((pair) => Boolean(pair && pair.includes("="))).join("; ");
+}
+async function fetchXueqiu(url, cookie, init = {}, redirects = 0) {
+  const headers = new Headers(init.headers);
+  for (const [key, value] of Object.entries(HEADERS)) {
+    if (!headers.has(key))
+      headers.set(key, value);
+  }
+  if (cookie)
+    headers.set("Cookie", cookie);
+  const response = await fetch(url, { ...init, headers, redirect: "manual" });
+  const extra = cookiePairsFromSetCookie(readSetCookie(response));
+  const nextCookie = extra ? mergeCookies(cookie, extra) : cookie;
+  if (response.status >= 300 && response.status < 400 && redirects < 5) {
+    const location = response.headers.get("location");
+    if (location) {
+      await response.arrayBuffer().catch(() => {});
+      return fetchXueqiu(new URL(location, url).toString(), nextCookie, init, redirects + 1);
+    }
+  }
+  return { response, cookie: nextCookie };
+}
+function cookiesFromTarget(webSocketDebuggerUrl) {
+  const ws = new WebSocket(webSocketDebuggerUrl);
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       ws.close();
@@ -4478,7 +4448,7 @@ async function getWafCookies(cdpUrl) {
       ws.send(JSON.stringify({
         id: 2,
         method: "Network.getCookies",
-        params: { urls: [XUEQIU_URL] }
+        params: { urls: [XUEQIU_ORIGIN, "https://xueqiu.com"] }
       }));
     };
     ws.onmessage = (event) => {
@@ -4487,9 +4457,9 @@ async function getWafCookies(cdpUrl) {
         clearTimeout(timeout);
         ws.close();
         const cookies = msg.result?.cookies || [];
-        const cookieStr = cookies.filter((c) => c.domain?.includes("xueqiu")).map((c) => `${c.name}=${c.value}`).join("; ");
+        const cookieStr = cookies.filter((cookie) => cookie.domain?.includes("xueqiu")).map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
         if (!cookieStr.includes("device_id")) {
-          reject(new Error("No device_id cookie — page may not have loaded yet"));
+          reject(new Error("No device_id cookie \u2014 page may not have loaded yet"));
           return;
         }
         resolve(cookieStr);
@@ -4501,15 +4471,30 @@ async function getWafCookies(cdpUrl) {
     };
   });
 }
-async function generateQRCode(wafCookies) {
-  const res = await fetch(`${XUEQIU_URL}/snb/provider/generate-qr-code`, {
-    method: "POST",
-    headers: { ...HEADERS, Cookie: wafCookies }
-  });
-  if (!res.ok) {
-    throw new Error(`QR generate failed: HTTP ${res.status}`);
+async function getWafCookies(cdpUrl) {
+  const targetsRes = await fetch(`${cdpUrl}/json`);
+  const targets = await targetsRes.json();
+  const pages = targets.filter((target) => target.type === "page" && target.url?.includes("xueqiu.com") && target.webSocketDebuggerUrl);
+  if (pages.length === 0) {
+    throw new Error("No xueqiu.com tab found in Chrome");
   }
-  const data = await res.json();
+  let lastError = "No device_id cookie \u2014 page may not have loaded yet";
+  for (const page of pages) {
+    try {
+      return await cookiesFromTarget(page.webSocketDebuggerUrl);
+    } catch (error) {
+      lastError = error?.message ?? lastError;
+    }
+  }
+  throw new Error(lastError);
+}
+async function generateQRCode(wafCookies) {
+  const { response, cookie } = await fetchXueqiu(qrGenerateUrl(), wafCookies, { method: "POST" });
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 180);
+    throw new Error(`QR generate failed: HTTP ${response.status} ${detail}`);
+  }
+  const data = await response.json();
   if (!data.success || !data.data?.qr_code) {
     throw new Error(`QR generate failed: ${data.message || JSON.stringify(data)}`);
   }
@@ -4518,104 +4503,146 @@ async function generateQRCode(wafCookies) {
   if (!codeMatch) {
     throw new Error(`Could not parse QR code from URL: ${qrUrl}`);
   }
-  return { qrUrl, code: codeMatch[1] };
+  return { qrUrl, code: codeMatch[1], cookie };
 }
 async function renderQRToTerminal(url) {
-  const qrText = await import_qrcode.default.toString(url, {
+  const qrText = await $toString(url, {
     type: "terminal",
     small: true,
     margin: 1
   });
   console.log(qrText);
 }
+async function writeQRPng(url, filePath) {
+  const absolute = resolve(filePath);
+  mkdirSync2(dirname(absolute), { recursive: true });
+  await $toFile(absolute, url, {
+    type: "png",
+    margin: 1,
+    width: 360,
+    errorCorrectionLevel: "M"
+  });
+  return absolute;
+}
+async function cookiesFromConfirm(cookie, payload, cdpUrl) {
+  if (hasLoginCookie(cookie))
+    return cookie;
+  if (payload?.access_token) {
+    const synthesized = mergeCookies(cookie, [
+      `xq_a_token=${payload.access_token}`,
+      payload.refresh_token ? `xq_r_token=${payload.refresh_token}` : "",
+      payload.id_token ? `xq_id_token=${payload.id_token}` : "",
+      payload.uid || payload.user_id ? `u=${payload.uid || payload.user_id}` : "",
+      "xq_is_login=1"
+    ].filter(Boolean).join("; "));
+    if (hasLoginCookie(synthesized))
+      return synthesized;
+  }
+  console.log(`
+  Scan confirmed. Reading auth cookies from Chrome...`);
+  await new Promise((r) => setTimeout(r, 1500));
+  try {
+    const fromChrome = await getWafCookies(cdpUrl);
+    if (hasLoginCookie(fromChrome))
+      return fromChrome;
+  } catch {}
+  throw new Error("Login was confirmed but xq_is_login was not in the response cookies. " + 'Try again, or paste a cookie with: snowball token "xq_a_token=...; u=..."');
+}
 async function pollQRStatus(code, wafCookies, cdpUrl, timeoutMs = 120000) {
   const startTime = Date.now();
   const pollInterval = 2500;
+  let cookie = wafCookies;
+  let announcedScan = false;
   while (Date.now() - startTime < timeoutMs) {
-    const res = await fetch(`${XUEQIU_URL}/snb/provider/query-qr-code-state?code=${code}`, { headers: { ...HEADERS, Cookie: wafCookies } });
+    const result = await fetchXueqiu(qrPollUrl(code), cookie);
+    cookie = result.cookie;
+    const res = result.response;
     if (!res.ok) {
-      throw new Error(`Poll failed: HTTP ${res.status}`);
+      const detail = (await res.text()).slice(0, 180);
+      throw new Error(`Poll failed: HTTP ${res.status} ${detail}`);
     }
     const data = await res.json();
-    const status = data.data?.status;
-    if (status === 1) {
-      const setCookies = res.headers.getSetCookie?.() ?? [];
-      if (setCookies.length > 0) {
-        const authCookies = setCookies.map((sc) => sc.split(";")[0]).join("; ");
-        const merged = mergeCookies(wafCookies, authCookies);
-        if (merged.includes("xq_a_token"))
-          return merged;
-      }
-      console.log(`
-  Scan confirmed! Extracting auth cookies from Chrome...`);
-      await new Promise((r) => setTimeout(r, 2000));
-      try {
-        const cookies = await getWafCookies(cdpUrl);
-        if (cookies.includes("xq_a_token"))
-          return cookies;
-      } catch {}
-      throw new Error("Login confirmed but could not extract xq_a_token — try: snowball login --manual");
+    const decision = interpretQRState(data);
+    if (decision.type === "confirmed" || decision.type === "login") {
+      return cookiesFromConfirm(cookie, decision.payload, cdpUrl);
     }
-    if (status === 2) {
-      process.stdout.write("✓");
-      await new Promise((r) => setTimeout(r, pollInterval));
-      continue;
+    if (decision.type === "bindphone") {
+      throw new Error("Xueqiu asked this account to bind a phone number before QR login can finish. " + "Bind it in the Xueqiu app, then run snowball login again.");
     }
-    if (status === 4) {
+    if (decision.type === "cancelled") {
+      throw new Error("Login cancelled in the Xueqiu app.");
+    }
+    if (decision.type === "expired")
       return "EXPIRED";
+    if (decision.type === "invalid") {
+      throw new Error(`Unexpected QR status: ${JSON.stringify(data).slice(0, 180)}`);
     }
-    process.stdout.write(".");
+    if (decision.type === "scanned" && !announcedScan) {
+      announcedScan = true;
+      process.stdout.write(`
+  Scanned. Tap \u786E\u8BA4\u767B\u5F55 in the Xueqiu app.
+  `);
+    } else {
+      process.stdout.write(decision.type === "scanned" ? "\u2713" : ".");
+    }
     await new Promise((r) => setTimeout(r, pollInterval));
   }
   throw new Error("Login timeout (2 min). QR code may have expired.");
 }
-function mergeCookies(base, override) {
-  const cookies = new Map;
-  for (const part of base.split("; ")) {
-    const [k, ...v] = part.split("=");
-    if (k)
-      cookies.set(k.trim(), v.join("="));
+async function presentQR(qrUrl, options) {
+  if (options.qrPngPath) {
+    const absolute = await writeQRPng(qrUrl, options.qrPngPath);
+    console.log(`  QR_PNG=${absolute}`);
   }
-  for (const part of override.split("; ")) {
-    const [k, ...v] = part.split("=");
-    if (k)
-      cookies.set(k.trim(), v.join("="));
+  const draw = options.drawTerminal !== false && Boolean(process.stdout.isTTY);
+  if (draw) {
+    await renderQRToTerminal(qrUrl);
+  } else if (!options.qrPngPath) {
+    console.log(`  QR_URL=${qrUrl}`);
   }
-  return [...cookies.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
 }
-async function qrLogin(cdpUrl) {
+async function qrLogin(cdpUrl, options = {}) {
   console.log("  Waiting for WAF cookies");
   process.stdout.write("  ");
   let wafCookies = "";
+  let lastError = "";
   for (let i = 0;i < 15; i++) {
     try {
       wafCookies = await getWafCookies(cdpUrl);
       break;
-    } catch {
+    } catch (error) {
+      lastError = error?.message ?? String(error);
       process.stdout.write(".");
       await new Promise((r) => setTimeout(r, 2000));
     }
   }
   if (!wafCookies) {
-    throw new Error("Could not get WAF cookies after 30s — Chrome may not have loaded xueqiu.com");
+    throw new Error(`Could not get WAF cookies after 30s (${lastError || "no device_id"}). ` + "Xueqiu blocks headless Chrome. Start a real Chrome window " + "(on a server: install Xvfb, or import a token from a machine with a display).");
   }
   console.log(`
-  ✓ Got WAF cookies
+  \u2713 Got WAF cookies
 `);
   const MAX_QR_ATTEMPTS = 3;
   for (let attempt = 1;attempt <= MAX_QR_ATTEMPTS; attempt++) {
     console.log("  Generating QR code...");
-    const { qrUrl, code } = await generateQRCode(wafCookies);
-    console.log(`  ✓ QR code ready
+    const generated = await generateQRCode(wafCookies);
+    wafCookies = generated.cookie;
+    console.log(`  \u2713 QR code ready
 `);
-    console.log("  ┌────────────────────────────────────┐");
-    console.log("  │  Scan this QR with the Xueqiu app  │");
-    console.log(`  └────────────────────────────────────┘
+    if (options.qrPngPath) {
+      console.log("  Scan this image with the Xueqiu app, then tap \u786E\u8BA4\u767B\u5F55.");
+      console.log(`  This command waits until that finishes. No need to press ENTER.
 `);
-    await renderQRToTerminal(qrUrl);
-    console.log("  Waiting for scan (tap 确认登录 in app after scanning)");
+    } else if (process.stdout.isTTY) {
+      console.log("  \u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510");
+      console.log("  \u2502  Scan this QR with the Xueqiu app  \u2502");
+      console.log(`  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518
+`);
+    }
+    await presentQR(generated.qrUrl, options);
+    console.log("  Waiting for scan");
     process.stdout.write("  ");
-    const cookie = await pollQRStatus(code, wafCookies, cdpUrl);
+    const cookie = await pollQRStatus(generated.code, wafCookies, cdpUrl);
     if (cookie === "EXPIRED") {
       if (attempt < MAX_QR_ATTEMPTS) {
         console.log(`
@@ -4623,17 +4650,269 @@ async function qrLogin(cdpUrl) {
 `);
         continue;
       }
-      throw new Error("QR code expired 3 times. Try: snowball login --manual");
+      throw new Error("QR code expired 3 times. Run snowball login again.");
     }
-    return { cookie, code };
+    return { cookie, code: generated.code };
   }
   throw new Error("QR login failed after retries");
+}
+
+// lib/browser.ts
+import { execFileSync, spawn } from "child_process";
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, rmSync } from "fs";
+import { homedir as homedir2, platform } from "os";
+import { join as join2 } from "path";
+var CHROME_PROFILE_DIR = join2(homedir2(), ".snowball-cli", "chrome-profile");
+var CHROME_SINGLETON_FILES = ["SingletonLock", "SingletonCookie", "SingletonSocket"];
+var LINUX_SANDBOX_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"];
+function planChromeLaunch(ctx) {
+  const args = [
+    `--remote-debugging-port=${ctx.port}`,
+    `--user-data-dir=${ctx.profileDir}`,
+    "--no-first-run",
+    "--no-default-browser-check"
+  ];
+  if (ctx.platform === "linux")
+    args.push(...LINUX_SANDBOX_ARGS);
+  if (ctx.platform === "linux" && !ctx.hasDisplay) {
+    if (ctx.xvfbAvailable) {
+      args.push("--disable-gpu");
+      return { args, headless: false, mode: "xvfb" };
+    }
+    args.push("--headless=new", "--disable-gpu");
+    return { args, headless: true, mode: "headless" };
+  }
+  return { args, headless: false, mode: "headed" };
+}
+function clearStaleChromeLocks(profileDir) {
+  for (const name of CHROME_SINGLETON_FILES) {
+    rmSync(join2(profileDir, name), { force: true });
+  }
+}
+function debugPort(cdpUrl) {
+  try {
+    const port = new URL(cdpUrl).port;
+    return port ? Number(port) : 9222;
+  } catch {
+    return 9222;
+  }
+}
+function commandExists(name) {
+  const found = Bun.which(name);
+  return Boolean(found);
+}
+function chromeCandidates() {
+  const os = platform();
+  const defaults = {
+    darwin: [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium"
+    ],
+    win32: [
+      join2(process.env.PROGRAMFILES ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
+      join2(process.env["PROGRAMFILES(X86)"] ?? "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
+      join2(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "Application", "chrome.exe"),
+      join2(process.env.PROGRAMFILES ?? "C:\\Program Files", "Chromium", "Application", "chrome.exe"),
+      join2(process.env.LOCALAPPDATA ?? "", "Chromium", "Application", "chrome.exe")
+    ],
+    linux: [
+      "google-chrome",
+      "google-chrome-stable",
+      "chromium-browser",
+      "chromium",
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/chromium",
+      "/snap/bin/chromium"
+    ]
+  };
+  return defaults[os] ?? defaults.linux;
+}
+function findChrome(explicit) {
+  if (explicit)
+    return explicit;
+  for (const candidate of chromeCandidates()) {
+    if (candidate.includes("/") || candidate.includes("\\")) {
+      if (existsSync2(candidate))
+        return candidate;
+    } else if (commandExists(candidate)) {
+      return candidate;
+    }
+  }
+  console.error(`
+  Chrome / Chromium not found.
+`);
+  if (platform() === "linux") {
+    console.error(`  Install Chromium:
+`);
+    console.error("    apt install -y chromium-browser   # Debian/Ubuntu");
+    console.error("    yum install -y chromium           # CentOS/RHEL");
+    console.error(`    snap install chromium             # Snap
+`);
+    console.error(`  On a server without a display, also install Xvfb (headless Chrome cannot pass Xueqiu's WAF):
+`);
+    console.error(`    apt install -y xvfb
+`);
+  } else if (platform() === "win32") {
+    console.error(`  Set CHROME_PATH:
+`);
+    console.error(`    set CHROME_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+`);
+  } else {
+    console.error(`  Install Chrome or Chromium, or set CHROME_PATH:
+`);
+    console.error(`    export CHROME_PATH=/path/to/chrome
+`);
+  }
+  console.error("  Or use --chrome flag:  snowball login --chrome /path/to/chrome");
+  console.error(`  Or skip the browser:   snowball import $(snowball export)  # from another machine
+`);
+  throw new Error("Chrome / Chromium not found");
+}
+function stopProfileChrome(profileDir) {
+  if (platform() === "win32")
+    return;
+  const pattern = `--user-data-dir=${profileDir}`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  try {
+    execFileSync("pkill", ["-f", pattern], { stdio: "ignore" });
+  } catch {}
+}
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function cdpReady(cdpUrl) {
+  try {
+    const res = await fetch(`${cdpUrl}/json/version`);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+async function startXvfb() {
+  if (!commandExists("Xvfb"))
+    return null;
+  for (let n = 99;n <= 109; n++) {
+    const display = `:${n}`;
+    const sock = `/tmp/.X11-unix/X${n}`;
+    if (existsSync2(sock))
+      continue;
+    const child = spawn("Xvfb", [display, "-screen", "0", "1280x800x24", "-ac", "-nolisten", "tcp"], { stdio: "ignore", detached: true });
+    child.unref();
+    for (let i = 0;i < 20; i++) {
+      if (existsSync2(sock))
+        return display;
+      await sleep(100);
+    }
+  }
+  return null;
+}
+function spawnChrome(bin, args, display) {
+  const env = { ...process.env };
+  if (display)
+    env.DISPLAY = display;
+  let stderrText = "";
+  const child = spawn(bin, args, {
+    stdio: ["ignore", "ignore", "pipe"],
+    detached: true,
+    env
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderrText = (stderrText + chunk.toString("utf8")).slice(-2000);
+  });
+  child.stderr?.unref?.();
+  child.unref();
+  return { stderr: () => stderrText };
+}
+async function ensureChrome(cdpUrl, chromePath) {
+  if (await cdpReady(cdpUrl))
+    return;
+  const profileDir = CHROME_PROFILE_DIR;
+  mkdirSync3(profileDir, { recursive: true });
+  const bin = findChrome(chromePath);
+  const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+  const xvfbAvailable = platform() === "linux" && !hasDisplay && commandExists("Xvfb");
+  const plan = planChromeLaunch({
+    platform: platform(),
+    hasDisplay,
+    xvfbAvailable,
+    profileDir,
+    port: debugPort(cdpUrl)
+  });
+  let display;
+  if (plan.mode === "xvfb") {
+    display = await startXvfb() ?? undefined;
+    if (!display) {
+      plan.args.push("--headless=new");
+      plan.headless = true;
+      plan.mode = "headless";
+    }
+  }
+  if (plan.mode === "headless") {
+    console.log("  No DISPLAY and Xvfb is not available \u2014 starting headless Chrome.");
+    console.log("  Xueqiu's WAF blocks headless Chrome, so login will probably fail.");
+    console.log("  Install Xvfb (`apt install -y xvfb`) or import a token from another machine.\n");
+  } else if (plan.mode === "xvfb") {
+    console.log(`  Starting Chrome on virtual display ${display} (Xvfb).`);
+    console.log(`  Headless Chrome cannot get Xueqiu WAF cookies; this is a real browser window.
+`);
+  } else {
+    console.log("  Starting Chrome...");
+  }
+  let lastStderr = "";
+  for (let attempt = 1;attempt <= 2; attempt++) {
+    stopProfileChrome(profileDir);
+    await sleep(attempt === 1 ? 200 : 500);
+    clearStaleChromeLocks(profileDir);
+    const child = spawnChrome(bin, plan.args, display);
+    for (let i = 0;i < 20; i++) {
+      await sleep(500);
+      if (await cdpReady(cdpUrl))
+        return;
+    }
+    lastStderr = child.stderr();
+  }
+  const tail = lastStderr.trim() ? `
+${lastStderr.trim()}
+` : "";
+  throw new Error(`Chrome failed to start.${tail}` + "On Linux the launcher adds --no-sandbox and deletes Singleton* locks in " + "~/.snowball-cli/chrome-profile before each attempt. " + "Set CHROME_PATH / --chrome if the detected binary is wrong.");
+}
+var XUEQIU_HOME = "https://www.xueqiu.com/";
+async function openXueqiuTab(cdpUrl) {
+  const version = await (await fetch(`${cdpUrl}/json/version`)).json();
+  const ws = new WebSocket(version.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("timeout"));
+    }, 1e4);
+    ws.onopen = () => ws.send(JSON.stringify({
+      id: 1,
+      method: "Target.createTarget",
+      params: { url: XUEQIU_HOME }
+    }));
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
+      if (msg.id === 1) {
+        clearTimeout(timer);
+        ws.close();
+        if (msg.error)
+          reject(new Error(msg.error.message || "CDP failed"));
+        else
+          resolve();
+      }
+    };
+    ws.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("CDP failed"));
+    };
+  });
 }
 
 // lib/api.ts
 init_auth();
 var STOCK_URL = "https://stock.xueqiu.com";
-var XUEQIU_URL2 = "https://xueqiu.com";
+var XUEQIU_URL = "https://xueqiu.com";
 var DANJUAN_URL = "https://danjuanapp.com";
 var HEADERS2 = {
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -4811,7 +5090,7 @@ async function forecast(symbol) {
   return data.data;
 }
 async function search(query, count = 10) {
-  const data = await request("/query/v1/suggest_stock.json", { q: query, count }, XUEQIU_URL2);
+  const data = await request("/query/v1/suggest_stock.json", { q: query, count }, XUEQIU_URL);
   return data.data;
 }
 async function hotStocks(type = "cn", size = 10) {
@@ -4851,7 +5130,7 @@ async function feed(category = "headlines", count = 20) {
     max_id: -1,
     category: catId,
     count
-  }, XUEQIU_URL2);
+  }, XUEQIU_URL);
   const list = data.list || [];
   return list.map((item) => {
     try {
@@ -4885,7 +5164,7 @@ async function hotPosts(scope = "day", count = 10, page = 1) {
     scope,
     type: "status",
     meigu: "0"
-  }, XUEQIU_URL2);
+  }, XUEQIU_URL);
   return (Array.isArray(data) ? data : []).map(formatPost);
 }
 async function liveNews(count = 20) {
@@ -4893,7 +5172,7 @@ async function liveNews(count = 20) {
     since_id: -1,
     max_id: -1,
     count
-  }, XUEQIU_URL2);
+  }, XUEQIU_URL);
   return (data.items || []).map((item) => ({
     id: item.id,
     text: item.text,
@@ -4909,7 +5188,7 @@ async function stockKOLs(symbol, count = 10) {
     symbol,
     start: 0,
     count
-  }, XUEQIU_URL2);
+  }, XUEQIU_URL);
   return (Array.isArray(data) ? data : []).map((u) => ({
     id: u.id,
     screen_name: u.screen_name,
@@ -4930,15 +5209,15 @@ async function userPosts(userId, count = 10, page = 1) {
     user_id: userId,
     page,
     count
-  }, XUEQIU_URL2);
+  }, XUEQIU_URL);
   return (data.statuses || []).map(formatPost);
 }
 async function userProfile(userId) {
-  const data = await request("/user/show.json", { id: userId }, XUEQIU_URL2);
+  const data = await request("/user/show.json", { id: userId }, XUEQIU_URL);
   return data;
 }
 async function searchUsers(query, count = 10, page = 1) {
-  const data = await request("/users/search.json", { q: query, count, page }, XUEQIU_URL2);
+  const data = await request("/users/search.json", { q: query, count, page }, XUEQIU_URL);
   return data.users ?? data;
 }
 async function liveNewsImportant(count = 20) {
@@ -4946,7 +5225,7 @@ async function liveNewsImportant(count = 20) {
     since_id: -1,
     max_id: -1,
     size: count
-  }, XUEQIU_URL2);
+  }, XUEQIU_URL);
   return (data.items || []).map((item) => ({
     id: item.id,
     text: item.text,
@@ -4958,7 +5237,7 @@ async function liveNewsImportant(count = 20) {
   }));
 }
 async function postDetail(postId) {
-  const data = await request("/statuses/show.json", { id: postId }, XUEQIU_URL2);
+  const data = await request("/statuses/show.json", { id: postId }, XUEQIU_URL);
   return data;
 }
 async function screen(market = "SH", orderby = "symbol", page = 1, size = 30) {
@@ -4970,7 +5249,7 @@ async function screen(market = "SH", orderby = "symbol", page = 1, size = 30) {
     size,
     current: "ALL",
     pct: "ALL"
-  }, XUEQIU_URL2);
+  }, XUEQIU_URL);
   return data.data;
 }
 async function fund(code) {
@@ -4987,14 +5266,14 @@ async function fundGrowth(code, period = "ty") {
 }
 
 // index.ts
-var __dirname2 = dirname(fileURLToPath(import.meta.url));
+var __dirname2 = dirname2(fileURLToPath(import.meta.url));
 var CDP_URL = process.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://127.0.0.1:9222";
 var MODE = process.argv[2];
-var VERSION = "0.3.1";
+var VERSION = "0.3.2";
 function showLogo() {
-  for (const base of [__dirname2, join2(__dirname2, "..")]) {
+  for (const base of [__dirname2, join3(__dirname2, "..")]) {
     try {
-      console.log(readFileSync2(join2(base, "lib", "logo.ansi"), "utf-8"));
+      console.log(readFileSync2(join3(base, "lib", "logo.ansi"), "utf-8"));
       return;
     } catch {}
   }
@@ -5028,184 +5307,82 @@ function count(def = 10) {
 function symbols() {
   return process.argv.slice(4).filter((a) => !a.startsWith("-"));
 }
-async function ensureChrome(cdpUrl) {
-  const { spawn } = await import("child_process");
-  const { mkdirSync: mkdirSync2 } = await import("fs");
-  const profileDir = join2(homedir2(), ".snowball-cli", "chrome-profile");
-  mkdirSync2(profileDir, { recursive: true });
-  let ready = false;
-  try {
-    await fetch(`${cdpUrl}/json/version`);
-    ready = true;
-  } catch {}
-  if (!ready) {
-    console.log("  Starting Chrome...");
-    const userPath = flag("chrome") ?? process.env.CHROME_PATH;
-    let bin;
-    if (userPath) {
-      bin = userPath;
-    } else {
-      const defaults = {
-        darwin: [
-          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-          "/Applications/Chromium.app/Contents/MacOS/Chromium"
-        ],
-        win32: [
-          join2(process.env.PROGRAMFILES ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
-          join2(process.env["PROGRAMFILES(X86)"] ?? "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
-          join2(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "Application", "chrome.exe"),
-          join2(process.env.PROGRAMFILES ?? "C:\\Program Files", "Chromium", "Application", "chrome.exe"),
-          join2(process.env.LOCALAPPDATA ?? "", "Chromium", "Application", "chrome.exe")
-        ],
-        linux: [
-          "google-chrome",
-          "google-chrome-stable",
-          "chromium-browser",
-          "chromium",
-          "/usr/bin/chromium-browser",
-          "/usr/bin/chromium",
-          "/snap/bin/chromium"
-        ]
-      };
-      const candidates = defaults[platform()] ?? defaults.linux;
-      const { existsSync: existsSync2 } = await import("fs");
-      const { execSync } = await import("child_process");
-      bin = "";
-      for (const c of candidates) {
-        if (c.includes("/") || c.includes("\\")) {
-          if (existsSync2(c)) {
-            bin = c;
-            break;
-          }
-        } else {
-          try {
-            const cmd = platform() === "win32" ? `where ${c}` : `which ${c}`;
-            execSync(cmd, { stdio: "ignore" });
-            bin = c;
-            break;
-          } catch {}
-        }
-      }
-      if (!bin) {
-        console.error(`
-  Chrome / Chromium not found.
+async function readConfirmedLogin(cdpUrl) {
+  const cookie = await getWafCookies(cdpUrl);
+  if (!hasLoginCookie(cookie)) {
+    throw new Error("missing xq_is_login");
+  }
+  return cookie;
+}
+async function waitForManualLogin(cdpUrl) {
+  if (process.stdin.isTTY) {
+    console.log("  Please login in the Chrome window:");
+    console.log(`    1. Click \u767B\u5F55 \u2192 2. Scan QR \u2192 3. Press ENTER
 `);
-        if (platform() === "linux") {
-          console.error(`  Install Chromium:
-`);
-          console.error("    apt install -y chromium-browser   # Debian/Ubuntu");
-          console.error("    yum install -y chromium           # CentOS/RHEL");
-          console.error(`    snap install chromium              # Snap
-`);
-        } else if (platform() === "win32") {
-          console.error(`  Set CHROME_PATH:
-`);
-          console.error(`    set CHROME_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-`);
-        } else {
-          console.error(`  Install Chrome or Chromium, or set CHROME_PATH:
-`);
-          console.error(`    export CHROME_PATH=/path/to/chrome
-`);
-        }
-        console.error("  Or use --chrome flag:  snowball login --chrome /path/to/chrome");
-        console.error(`  Or skip browser:       snowball import $(snowball export)  # from another machine
-`);
-        process.exit(1);
-      }
-    }
-    const isHeadless = platform() === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
-    const chromeArgs = [
-      "--remote-debugging-port=9222",
-      `--user-data-dir=${profileDir}`,
-      ...isHeadless ? ["--headless=new", "--no-sandbox", "--disable-gpu"] : []
-    ];
-    if (isHeadless)
-      console.log("  Headless mode detected (no DISPLAY)");
-    const child = spawn(bin, chromeArgs, { stdio: "ignore", detached: true });
-    child.unref();
-    for (let i = 0;i < 15; i++) {
-      await new Promise((r) => setTimeout(r, 1000));
-      try {
-        await fetch(`${cdpUrl}/json/version`);
-        ready = true;
-        break;
-      } catch {}
-    }
-    if (!ready) {
-      console.error(`  Chrome failed to start.
-`);
-      process.exit(1);
+    process.stdout.write("  Press ENTER > ");
+    for await (const _ of console)
+      break;
+    try {
+      return await readConfirmedLogin(cdpUrl);
+    } catch {
+      throw new Error("Chrome does not have a Xueqiu login yet (missing xq_is_login). " + "Confirm in the app, then press ENTER again.");
     }
   }
-}
-async function openXueqiuTab(cdpUrl) {
-  const { webSocketDebuggerUrl } = await (await fetch(`${cdpUrl}/json/version`)).json();
-  const ws = new WebSocket(webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    const t = setTimeout(() => {
-      ws.close();
-      reject(new Error("timeout"));
-    }, 1e4);
-    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Target.createTarget", params: { url: "https://xueqiu.com" } }));
-    ws.onmessage = (e) => {
-      const m = JSON.parse(typeof e.data === "string" ? e.data : "");
-      if (m.id === 1) {
-        clearTimeout(t);
-        ws.close();
-        resolve();
-      }
-    };
-    ws.onerror = () => {
-      clearTimeout(t);
-      reject(new Error("CDP failed"));
-    };
-  });
+  console.log("  stdin is not a TTY, so there is no ENTER prompt.");
+  console.log(`  Waiting until the Xueqiu login cookie appears in Chrome (2 min)...
+`);
+  const start = Date.now();
+  while (Date.now() - start < 120000) {
+    try {
+      return await readConfirmedLogin(cdpUrl);
+    } catch {}
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error("Timed out waiting for Xueqiu login (stdin is not a TTY).");
 }
 var commands = {
   Auth: {
     login: {
-      usage: "login [--manual] [--chrome <path>]",
-      desc: "QR code login (set CHROME_PATH or --chrome for custom Chrome)",
+      usage: "login [--manual] [--qr-png <path>] [--chrome <path>]",
+      desc: "QR login. --qr-png writes a PNG and waits (no ENTER)",
       run: async () => {
         showLogo();
-        console.log(`  Snowball CLI — Login
+        console.log(`  Snowball CLI \u2014 Login
 `);
-        await ensureChrome(CDP_URL);
+        const qrPng = flag("qr-png");
+        if (hasFlag("qr-png") && (!qrPng || qrPng.startsWith("-"))) {
+          console.error(`
+  Usage: snowball login --qr-png <path.png>
+`);
+          process.exit(1);
+        }
+        await ensureChrome(CDP_URL, flag("chrome") ?? process.env.CHROME_PATH);
         if (hasFlag("manual")) {
           console.log(`  Opening xueqiu.com...
 `);
           await openXueqiuTab(CDP_URL);
-          console.log("  Please login in the Chrome window:");
-          console.log(`    1. Click '登录' → 2. Scan QR → 3. Press ENTER
-`);
-          process.stdout.write("  Press ENTER > ");
-          for await (const _ of console)
-            break;
-          const cookie = await extractFromChrome(CDP_URL);
+          const cookie = await waitForManualLogin(CDP_URL);
           saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
         } else {
           console.log("  Opening xueqiu.com (background)...");
           await openXueqiuTab(CDP_URL);
           try {
-            const { cookie } = await qrLogin(CDP_URL);
+            const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng });
             saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
           } catch (e) {
+            if (qrPng || !process.stdin.isTTY) {
+              throw new Error(`QR failed: ${e.message}`);
+            }
             console.error(`
   QR failed: ${e.message}
   Falling back to manual...
 `);
-            console.log(`  Login in Chrome → press ENTER
-`);
-            process.stdout.write("  Press ENTER > ");
-            for await (const _ of console)
-              break;
-            const cookie = await extractFromChrome(CDP_URL);
+            const cookie = await waitForManualLogin(CDP_URL);
             saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
           }
         }
         console.log(`
-  ✓ Login successful! Token saved.
+  \u2713 Login successful! Token saved.
 `);
         console.log(`  Try: snowball quote SH600519
 `);
@@ -5232,10 +5409,10 @@ var commands = {
       usage: "logout",
       desc: "Remove saved token",
       run: async () => {
-        const { existsSync: existsSync2, unlinkSync } = await import("fs");
-        const { TOKEN_PATH: TOKEN_PATH2 } = await Promise.resolve().then(() => (init_auth(), exports_auth));
-        if (existsSync2(TOKEN_PATH2)) {
-          unlinkSync(TOKEN_PATH2);
+        const { existsSync, unlinkSync } = await import("fs");
+        await Promise.resolve().then(() => init_auth());
+        if (existsSync(TOKEN_PATH)) {
+          unlinkSync(TOKEN_PATH);
           console.log(`
   Token removed.
 `);
@@ -5301,10 +5478,10 @@ var commands = {
         const days = Math.floor((Date.now() - new Date(token.extractedAt).getTime()) / 86400000);
         process.stdout.write(`
   Token: ${token.source}, saved ${days === 0 ? "today" : days + "d ago"}`);
-        process.stdout.write(" — verifying...");
+        process.stdout.write(" \u2014 verifying...");
         const { valid } = await verifyToken(token.cookie);
-        console.log(valid ? ` ✓ active
-` : ` ✗ expired
+        console.log(valid ? ` \u2713 active
+` : ` \u2717 expired
   Run: snowball login
 `);
       }
@@ -5477,12 +5654,12 @@ var commands = {
     search: {
       usage: "search <keyword>",
       desc: "Search stocks by keyword",
-      run: async () => out(await search(requireArg(1, "Usage: snowball search 茅台")))
+      run: async () => out(await search(requireArg(1, "Usage: snowball search \u8305\u53F0")))
     },
     "search-user": {
       usage: "search-user <keyword> [--count 10]",
       desc: "Search users by keyword",
-      run: async () => out(await searchUsers(requireArg(1, "Usage: snowball search-user 价投"), count(10)))
+      run: async () => out(await searchUsers(requireArg(1, "Usage: snowball search-user \u4EF7\u6295"), count(10)))
     },
     screen: {
       usage: "screen [SH|HK|US] [--count 30]",
@@ -5519,7 +5696,7 @@ for (const group of Object.values(commands)) {
   }
 }
 showLogo();
-console.log(`  Snowball CLI v${VERSION} — Xueqiu stock data for AI agents
+console.log(`  Snowball CLI v${VERSION} \u2014 Xueqiu stock data for AI agents
 `);
 for (const [groupName, cmds] of Object.entries(commands)) {
   console.log(`  ${groupName}:`);
@@ -5534,5 +5711,5 @@ console.log(`  Symbols:`);
 console.log(`    SH600519  Shanghai (Maotai)      AAPL   US stock`);
 console.log(`    SZ000858  Shenzhen (Wuliangye)   01810  HK stock (Xiaomi)
 `);
-console.log(`  All output is JSON — pipe to jq or use in agent scripts.
+console.log(`  All output is JSON \u2014 pipe to jq or use in agent scripts.
 `);

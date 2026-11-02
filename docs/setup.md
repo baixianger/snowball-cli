@@ -3,8 +3,9 @@
 ## Local desktop (macOS / Windows / Linux)
 
 ```bash
+curl -fsSL https://bun.sh/install | bash   # Bun is required; the snowball bin runs under Bun
 bun add -g snowball-cli
-snowball login    # QR in terminal, simplest
+snowball login    # QR in the terminal
 ```
 
 ## VPS (headless server)
@@ -16,11 +17,14 @@ ssh vps "curl -fsSL https://bun.sh/install | bash && ~/.bun/bin/bun add -g snowb
 ssh vps "~/.bun/bin/snowball import $(snowball export)"
 ```
 
-**Option B: Install Chromium on VPS and login there**
+**Option B: Install Chrome and Xvfb on the VPS and log in there**
+
+Headless Chrome is blocked by Xueqiu's WAF (the page never issues `device_id`). With no `DISPLAY`, `snowball login` starts Xvfb and a real Chrome window (`--no-sandbox`, stale `Singleton*` locks cleared). Do not rely on `--headless`.
 
 ```bash
-ssh vps "apt install -y chromium-browser"
-ssh vps "~/.bun/bin/snowball login"    # auto-headless, QR in SSH terminal
+ssh vps "apt install -y xvfb google-chrome-stable"   # or: chromium-browser
+ssh vps "~/.bun/bin/snowball login --qr-png /tmp/xueqiu-qr.png"
+# prints QR_PNG=/tmp/xueqiu-qr.png and waits until the Xueqiu app confirms
 ```
 
 ## Docker container

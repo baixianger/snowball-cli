@@ -4,24 +4,21 @@
  */
 
 import { readFileSync } from "fs";
-import { homedir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { platform } from "os";
 import {
-  extractFromChrome,
   saveToken,
   loadToken,
-  getCookie,
   verifyToken,
 } from "./lib/auth";
-import { qrLogin } from "./lib/qr-terminal";
+import { qrLogin, hasLoginCookie, getWafCookies } from "./lib/qr-terminal";
+import { ensureChrome, openXueqiuTab } from "./lib/browser";
 import * as api from "./lib/api";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CDP_URL = process.argv.find((_, i, a) => a[i - 1] === "--cdp") ?? "http://127.0.0.1:9222";
 const MODE = process.argv[2];
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 
 // ═══════════════════════════════════════════════════════════════
 //  Helpers
@@ -71,109 +68,43 @@ function symbols(): string[] {
 //  Chrome / Login helpers
 // ═══════════════════════════════════════════════════════════════
 
-async function ensureChrome(cdpUrl: string): Promise<void> {
-  const { spawn } = await import("child_process");
-  const { mkdirSync } = await import("fs");
-  const profileDir = join(homedir(), ".snowball-cli", "chrome-profile");
-  mkdirSync(profileDir, { recursive: true });
-
-  let ready = false;
-  try { await fetch(`${cdpUrl}/json/version`); ready = true; } catch {}
-
-  if (!ready) {
-    console.log("  Starting Chrome...");
-
-    // Priority: --chrome flag > CHROME_PATH env > platform defaults
-    const userPath = flag("chrome") ?? process.env.CHROME_PATH;
-    let bin: string;
-
-    if (userPath) {
-      bin = userPath;
-    } else {
-      const defaults: Record<string, string[]> = {
-        darwin: [
-          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-          "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        ],
-        win32: [
-          join(process.env.PROGRAMFILES ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
-          join(process.env["PROGRAMFILES(X86)"] ?? "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
-          join(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "Application", "chrome.exe"),
-          join(process.env.PROGRAMFILES ?? "C:\\Program Files", "Chromium", "Application", "chrome.exe"),
-          join(process.env.LOCALAPPDATA ?? "", "Chromium", "Application", "chrome.exe"),
-        ],
-        linux: [
-          "google-chrome", "google-chrome-stable",
-          "chromium-browser", "chromium",
-          "/usr/bin/chromium-browser", "/usr/bin/chromium",
-          "/snap/bin/chromium",
-        ],
-      };
-      const candidates = defaults[platform()] ?? defaults.linux;
-      const { existsSync } = await import("fs");
-      const { execSync } = await import("child_process");
-      bin = "";
-      for (const c of candidates) {
-        // Absolute paths: check file exists. Bare names: check if on PATH.
-        if (c.includes("/") || c.includes("\\")) {
-          if (existsSync(c)) { bin = c; break; }
-        } else {
-          try {
-            const cmd = platform() === "win32" ? `where ${c}` : `which ${c}`;
-            execSync(cmd, { stdio: "ignore" });
-            bin = c; break;
-          } catch {}
-        }
-      }
-      if (!bin) {
-        console.error("\n  Chrome / Chromium not found.\n");
-        if (platform() === "linux") {
-          console.error("  Install Chromium:\n");
-          console.error("    apt install -y chromium-browser   # Debian/Ubuntu");
-          console.error("    yum install -y chromium           # CentOS/RHEL");
-          console.error("    snap install chromium              # Snap\n");
-        } else if (platform() === "win32") {
-          console.error("  Set CHROME_PATH:\n");
-          console.error('    set CHROME_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"\n');
-        } else {
-          console.error("  Install Chrome or Chromium, or set CHROME_PATH:\n");
-          console.error("    export CHROME_PATH=/path/to/chrome\n");
-        }
-        console.error("  Or use --chrome flag:  snowball login --chrome /path/to/chrome");
-        console.error("  Or skip browser:       snowball import $(snowball export)  # from another machine\n");
-        process.exit(1);
-      }
-    }
-
-    // Headless detection: no DISPLAY on Linux = headless server
-    const isHeadless = platform() === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
-    const chromeArgs = [
-      "--remote-debugging-port=9222",
-      `--user-data-dir=${profileDir}`,
-      ...(isHeadless ? ["--headless=new", "--no-sandbox", "--disable-gpu"] : []),
-    ];
-    if (isHeadless) console.log("  Headless mode detected (no DISPLAY)");
-
-    const child = spawn(bin, chromeArgs, { stdio: "ignore", detached: true });
-    child.unref();
-
-    for (let i = 0; i < 15; i++) {
-      await new Promise(r => setTimeout(r, 1000));
-      try { await fetch(`${cdpUrl}/json/version`); ready = true; break; } catch {}
-    }
-    if (!ready) { console.error("  Chrome failed to start.\n"); process.exit(1); }
+async function readConfirmedLogin(cdpUrl: string): Promise<string> {
+  const cookie = await getWafCookies(cdpUrl);
+  if (!hasLoginCookie(cookie)) {
+    throw new Error("missing xq_is_login");
   }
+  return cookie;
 }
 
-async function openXueqiuTab(cdpUrl: string): Promise<void> {
-  const { webSocketDebuggerUrl } = await (await fetch(`${cdpUrl}/json/version`)).json();
-  const ws = new WebSocket(webSocketDebuggerUrl);
-  await new Promise<void>((resolve, reject) => {
-    const t = setTimeout(() => { ws.close(); reject(new Error("timeout")); }, 10000);
-    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Target.createTarget", params: { url: "https://xueqiu.com" } }));
-    ws.onmessage = (e) => { const m = JSON.parse(typeof e.data === "string" ? e.data : ""); if (m.id === 1) { clearTimeout(t); ws.close(); resolve(); } };
-    ws.onerror = () => { clearTimeout(t); reject(new Error("CDP failed")); };
-  });
+/** Manual login. A TTY waits for ENTER; otherwise poll Chrome until the session cookie appears. */
+async function waitForManualLogin(cdpUrl: string): Promise<string> {
+  if (process.stdin.isTTY) {
+    console.log("  Please login in the Chrome window:");
+    console.log("    1. Click 登录 → 2. Scan QR → 3. Press ENTER\n");
+    process.stdout.write("  Press ENTER > ");
+    for await (const _ of console) break;
+    try {
+      return await readConfirmedLogin(cdpUrl);
+    } catch {
+      throw new Error(
+        "Chrome does not have a Xueqiu login yet (missing xq_is_login). " +
+          "Confirm in the app, then press ENTER again.",
+      );
+    }
+  }
+
+  console.log("  stdin is not a TTY, so there is no ENTER prompt.");
+  console.log("  Waiting until the Xueqiu login cookie appears in Chrome (2 min)...\n");
+  const start = Date.now();
+  while (Date.now() - start < 120000) {
+    try {
+      return await readConfirmedLogin(cdpUrl);
+    } catch {
+      // Page may still be loading, or the user has not confirmed yet.
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error("Timed out waiting for Xueqiu login (stdin is not a TTY).");
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -191,34 +122,36 @@ const commands: Record<string, Record<string, Command>> = {
   // ── Auth ──────────────────────────────────────────────────────
   "Auth": {
     login: {
-      usage: "login [--manual] [--chrome <path>]",
-      desc: "QR code login (set CHROME_PATH or --chrome for custom Chrome)",
+      usage: "login [--manual] [--qr-png <path>] [--chrome <path>]",
+      desc: "QR login. --qr-png writes a PNG and waits (no ENTER)",
       run: async () => {
         showLogo();
         console.log("  Snowball CLI — Login\n");
-        await ensureChrome(CDP_URL);
+        const qrPng = flag("qr-png");
+        if (hasFlag("qr-png") && (!qrPng || qrPng.startsWith("-"))) {
+          console.error("\n  Usage: snowball login --qr-png <path.png>\n");
+          process.exit(1);
+        }
+        await ensureChrome(CDP_URL, flag("chrome") ?? process.env.CHROME_PATH);
 
         if (hasFlag("manual")) {
           console.log("  Opening xueqiu.com...\n");
           await openXueqiuTab(CDP_URL);
-          console.log("  Please login in the Chrome window:");
-          console.log("    1. Click '登录' → 2. Scan QR → 3. Press ENTER\n");
-          process.stdout.write("  Press ENTER > ");
-          for await (const _ of console) break;
-          const cookie = await extractFromChrome(CDP_URL);
+          const cookie = await waitForManualLogin(CDP_URL);
           saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
         } else {
           console.log("  Opening xueqiu.com (background)...");
           await openXueqiuTab(CDP_URL);
           try {
-            const { cookie } = await qrLogin(CDP_URL);
+            const { cookie } = await qrLogin(CDP_URL, { qrPngPath: qrPng });
             saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome-qr" });
           } catch (e: any) {
+            // Agents and --qr-png must not block on ENTER. A TTY can still fall back.
+            if (qrPng || !process.stdin.isTTY) {
+              throw new Error(`QR failed: ${e.message}`);
+            }
             console.error(`\n  QR failed: ${e.message}\n  Falling back to manual...\n`);
-            console.log("  Login in Chrome → press ENTER\n");
-            process.stdout.write("  Press ENTER > ");
-            for await (const _ of console) break;
-            const cookie = await extractFromChrome(CDP_URL);
+            const cookie = await waitForManualLogin(CDP_URL);
             saveToken({ cookie, extractedAt: new Date().toISOString(), source: "chrome" });
           }
         }

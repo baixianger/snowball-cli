@@ -27,19 +27,32 @@ snowball fund 110011 --growth        # 基金收益
 
 ## 安装
 
-如果 `snowball` 命令不存在，提示用户运行：
+如果 `snowball` 命令不存在，提示用户安装 **Bun** 后再装 CLI。`snowball` 的 shebang 是 `#!/usr/bin/env bun`，用 Node 跑会在登录时崩（`console is not async iterable`）。
 
 ```bash
-npm install -g snowball-cli
+curl -fsSL https://bun.sh/install | bash
+bun add -g snowball-cli
 ```
 
 ## 登录（仅在需要时）
 
 大部分命令需要雪球登录态。上面列出的 `quote`、`market`、`fund` 无需登录。
 
-遇到「Not logged in」错误时，提示用户自行完成登录。**不要代替用户执行认证命令。** 告知用户以下方式：
+遇到「Not logged in」错误时，先 `snowball status`。登录必须由用户在雪球 App 里确认，Agent 可以替用户把二维码图片送到手机，但不要自己编造 cookie。
 
-- `snowball login` — 用雪球 App 扫码登录（需要 Chrome/Chromium）
+在 Linux 服务器上（推荐，不用让用户打开网页）：
+
+```bash
+snowball login --qr-png /tmp/xueqiu-qr.png
+```
+
+命令会打印 `QR_PNG=/tmp/xueqiu-qr.png`，然后一直阻塞到用户扫码并在 App 里点「确认登录」。把这个 PNG 发到用户的手机聊天里，告诉对方用雪球 App 扫一扫并确认。stdin 不是 TTY 时不要按回车，命令自己结束。
+
+没有图形界面时，CLI 会用 Xvfb 启动真实 Chrome（无头模式过不了雪球 WAF）。Chrome 起不来时，CLI 已默认加 `--no-sandbox` 并清理 `~/.snowball-cli/chrome-profile` 里的 `Singleton*` 锁。仍失败就装 `xvfb` 和 Chrome/Chromium，或改用下面的导入方式。
+
+其他方式：
+
+- `snowball login` — 终端里显示二维码（有 TTY 时）
 - `snowball export` / `snowball import <base64>` — 从已登录的机器导入 token
 
 可以用 `snowball status` 检查当前 token 状态。
@@ -162,7 +175,9 @@ snowball profile <ID>
 
 ## 常见问题
 
-- **「Not logged in」** — `snowball login` 或 `snowball token <cookie>`
-- **HTTP 403 / WAF** — 等几分钟或重新登录
-- **Chrome not found** — 设置 `CHROME_PATH` 或 `--chrome`
+- **「Not logged in」** — `snowball login --qr-png <文件>`（把 PNG 发给用户）或 `snowball token <cookie>`
+- **HTTP 400 on query-qr-code-state** — 轮询必须打 `www.xueqiu.com`。apex 的 301 会让 fetch 丢掉 Cookie
+- **HTTP 403 / WAF** — 等几分钟或重新登录。无头 Chrome 拿不到 WAF cookie，改用 Xvfb
+- **Chrome failed to start** — Linux 需要 `--no-sandbox`（CLI 已加）并清掉 profile 里的 Singleton 锁；或设置 `CHROME_PATH` / `--chrome`
+- **`console is not async iterable`** — 命令被 Node 执行了。用 Bun 安装并保证 `snowball` 走 `#!/usr/bin/env bun`
 - **Token 过期** — `snowball status` 检查，过期重新 `login`

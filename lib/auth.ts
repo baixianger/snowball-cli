@@ -49,9 +49,10 @@ export function getCookie(): string {
   const token = loadToken();
   if (!token) {
     console.error("\n  Not logged in. Run:\n");
-    console.error("    snowball login          # QR code in terminal");
-    console.error("    snowball login --manual  # scan in Chrome window");
-    console.error("    snowball token <cookie>  # manual paste\n");
+    console.error("    snowball login                 # QR code in the terminal");
+    console.error("    snowball login --qr-png <file> # PNG for a phone chat, then wait");
+    console.error("    snowball login --manual        # scan in the Chrome window");
+    console.error("    snowball token <cookie>        # manual paste\n");
     process.exit(1);
   }
   return token.cookie;

@@ -26,6 +26,15 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Build (Bun target, bun shebang)
+        run: bun run build
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Unit tests
+        run: bun test
+
       - name: CLI loads (help)
         run: bun run index.ts --help
 

@@ -1,6 +1,6 @@
 {
   "name": "snowball-cli",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Xueqiu (雪球) stock data CLI for AI agents — quotes, klines, financials, KOL sentiment, live news, and more",
   "main": "dist/index.js",
   "module": "index.ts",
@@ -37,10 +37,16 @@
     "url": "https://github.com/baixianger/snowball-cli/issues"
   },
   "bin": {
-    "snowball": "cli.js"
+    "snowball": "dist/index.js"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
   },
   "scripts": {
-    "build": "bun build index.ts --outdir dist --target node"
+    "build": "bun build index.ts --outdir dist --target bun --banner '#!/usr/bin/env bun'",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "start": "bun index.ts"
   },
   "files": [
     "dist/",
@@ -53,7 +59,9 @@
     "README.zh-CN.md"
   ],
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^5"
   },
   "peerDependencies": {
     "typescript": "^5"
